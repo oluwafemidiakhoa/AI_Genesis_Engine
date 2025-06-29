@@ -5,91 +5,118 @@ import os
 import json
 import subprocess
 import time
-import re  # <--- THE MISSING IMPORT
-import threading
-from queue import Queue
-import zipfile
-from io import BytesIO
+import re
 
 # --- CONFIGURATION & STATE ---
-PROJECT_DIR = "helios_reborn_project"
+PROJECT_DIR = "world_model_project"
 openai_client, gemini_model = None, None
 
-# --- TOOL DEFINITIONS ---
-def list_files(path: str = ".") -> str:
-    """Lists all files and directories in a given path within the project."""
-    full_path = os.path.join(PROJECT_DIR, path)
-    if not os.path.isdir(full_path):
-        os.makedirs(full_path, exist_ok=True)
-    try:
-        files = os.listdir(full_path)
-        return "\n".join(files) if files else "(empty directory)"
-    except Exception as e: return f"Error listing files: {e}"
+# The single source of truth for the AI's world
+world_state = {"files": {}}
 
+# --- TOOLS THAT MODIFY THE WORLD STATE ---
 def write_file(path: str, content: str) -> str:
-    """Writes or overwrites a file with the given content."""
+    """Writes content to a file and updates the world state."""
+    global world_state
     full_path = os.path.join(PROJECT_DIR, path)
     try:
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
-        with open(full_path, 'w', encoding='utf-8') as f: f.write(content)
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        # Update world state
+        path_parts = path.split('/')
+        current_level = world_state["files"]
+        for part in path_parts[:-1]:
+            current_level = current_level.setdefault(part, {})
+        current_level[path_parts[-1]] = content
+        
         return f"Successfully wrote {len(content)} bytes to {path}."
-    except Exception as e: return f"Error writing to file: {e}"
+    except Exception as e:
+        return f"Error writing to file: {e}"
 
 def run_shell_command(command: str) -> str:
-    """Executes a shell command in the project directory."""
+    """Executes a shell command and updates the world state if it creates files/dirs."""
+    global world_state
     try:
+        # We can't easily track shell changes, so we'll rescan the file system after.
         result = subprocess.run(command, shell=True, cwd=PROJECT_DIR, capture_output=True, text=True, timeout=120)
+        
+        # Rescan and update world state
+        new_file_state = {}
+        for root, dirs, files in os.walk(PROJECT_DIR):
+            path = root.split(os.sep)
+            current_level = new_file_state
+            for part in path[1:]:
+                current_level = current_level.setdefault(part, {})
+            for f in files:
+                current_level[f] = "" # We don't read content for this simple update
+        world_state["files"] = new_file_state
+        
         return f"COMMAND:\n$ {command}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-    except Exception as e: return f"Error executing shell command: {e}"
+    except Exception as e:
+        return f"Error executing shell command: {e}"
 
 def step_complete(reason: str) -> str:
-    """Call this function when you believe the current step's instruction is fully completed."""
-    return f"Step marked as complete. Reason: {reason}"
+    """Marks a high-level step as complete."""
+    return f"Step finished. Reason: {reason}"
 
 # --- INITIALIZATION ---
 def initialize_clients():
     global openai_client, gemini_model
     openai_key = os.getenv("OPENAI_API_KEY")
-    google_key = os.getenv("GOOGLE_API_KEY")
-    if not openai_key or not google_key:
-        return "❌ Missing Secrets: Please set `OPENAI_API_KEY` and `GOOGLE_API_KEY` in repository secrets.", False
+    if not openai_key:
+        return "❌ Missing Secret: `OPENAI_API_KEY`", False
     try:
         openai_client = openai.OpenAI(api_key=openai_key)
         openai_client.models.list()
-        genai.configure(api_key=google_key)
-        gemini_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest")
-        gemini_model.generate_content("ping")
-        return "✅ All engines online. Helios Reborn awaits your command.", True
-    except Exception as e: return f"❌ API Initialization Failed: {e}", False
+        return "✅ Engine Online. World Model is active.", True
+    except Exception as e:
+        return f"❌ API Initialization Failed: {e}", False
 
-# --- THE MASTER CRAFTSMAN (INNER LOOP) ---
-def execute_step(step_instruction: str, mission_log: str):
-    """Executes a single high-level step using GPT-4o in a tool-calling loop."""
-    mission_log += f"Master Craftsman (GPT-4o): Starting task: '{step_instruction}'\n"
+# --- THE WORLD MODEL ORCHESTRATOR ---
+def run_world_model_mission(initial_prompt, max_steps=15):
+    global world_state
+    
+    mission_log = "Mission Log: [START]\n"
+    yield mission_log, json.dumps(world_state, indent=2)
+
+    # Reset the world for a new mission
+    if os.path.exists(PROJECT_DIR):
+        import shutil
+        shutil.rmtree(PROJECT_DIR)
+    os.makedirs(PROJECT_DIR, exist_ok=True)
+    world_state = {"files": {}}
     
     conversation = [
-        {
-            "role": "system",
-            "content": (
-                "You are a Master Craftsman, an expert AI developer. Your goal is to complete the user's high-level instruction by calling a sequence of functions. "
-                "Think step-by-step. You can call multiple tools in one turn if needed. "
-                "When you are confident the instruction is fully complete, you MUST call the `step_complete` function."
-            )
-        },
-        {"role": "user", "content": step_instruction}
+        {"role": "user", "content": f"Here is my objective: {initial_prompt}"}
     ]
     
     tools = [
-        {"type": "function", "function": {"name": "list_files", "description": "Lists files in a directory.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
         {"type": "function", "function": {"name": "write_file", "description": "Writes content to a file.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
         {"type": "function", "function": {"name": "run_shell_command", "description": "Executes a shell command.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
-        {"type": "function", "function": {"name": "step_complete", "description": "Call this when the current high-level step is finished.", "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]}}}
+        {"type": "function", "function": {"name": "step_complete", "description": "Call this when the objective is complete.", "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]}}}
     ]
     
-    for _ in range(10): # Max 10 tool calls per step
+    for i in range(max_steps):
+        # Inject the current world state into the system prompt
+        system_prompt = (
+            "You are an autonomous AI developer. Your goal is to achieve the user's objective by calling a sequence of functions. "
+            "You have access to a file system and a shell. Think step-by-step. "
+            "When you believe the objective is complete, call the `step_complete` function. "
+            "Here is the current state of your file system:\n"
+            f"```json\n{json.dumps(world_state, indent=2)}\n```"
+        )
+        
+        messages = [{"role": "system", "content": system_prompt}] + conversation
+        
+        mission_log += f"\n--- Step {i+1}/{max_steps} ---\n"
+        mission_log += "AI is thinking...\n"
+        yield mission_log, json.dumps(world_state, indent=2)
+        
         response = openai_client.chat.completions.create(
             model="gpt-4o",
-            messages=conversation,
+            messages=messages,
             tools=tools,
             tool_choice="auto"
         )
@@ -97,98 +124,49 @@ def execute_step(step_instruction: str, mission_log: str):
         conversation.append(response_message)
         
         if not response_message.tool_calls:
-            mission_log += "Craftsman: Decided to end step without calling `step_complete`.\n"
-            return mission_log, False # Step failed
+            break
 
         tool_responses = []
         for tool_call in response_message.tool_calls:
             function_name = tool_call.function.name
             function_args = json.loads(tool_call.function.arguments)
             
-            mission_log += f"Craftsman: Calling tool `{function_name}` with args: {function_args}\n"
+            mission_log += f"Action: Calling `{function_name}` with args: {function_args}\n"
+            yield mission_log, json.dumps(world_state, indent=2)
             
             if function_name == "step_complete":
-                mission_log += f"Craftsman: Step finished. Reason: {function_args.get('reason')}\n"
-                return mission_log, True # Step succeeded
+                mission_log += f"Result: {function_args.get('reason')}\n--- MISSION COMPLETE ---"
+                yield mission_log, json.dumps(world_state, indent=2)
+                return
             
             tool_function = globals()[function_name]
             result = tool_function(**function_args)
-            mission_log += f"Tool Result: {result}\n"
             
-            tool_responses.append(
-                {"tool_call_id": tool_call.id, "role": "tool", "name": function_name, "content": result}
-            )
-        
-        conversation.extend(tool_responses) # Add all tool responses to the conversation
-
-    mission_log += "Craftsman: Max tool calls reached for this step. Moving on.\n"
-    return mission_log, False # Step failed
-
-# --- THE HELIOS REBORN ORCHESTRATOR (OUTER LOOP) ---
-def run_helios_reborn_mission(initial_prompt):
-    mission_log = "Mission Log: [START]\n"
-    yield mission_log, gr.update(choices=[])
-
-    if os.path.exists(PROJECT_DIR):
-        import shutil
-        shutil.rmtree(PROJECT_DIR)
-    os.makedirs(PROJECT_DIR, exist_ok=True)
-    
-    # Phase 1: Architect (Gemini) creates the natural language plan
-    mission_log += "Architect (Gemini): Creating high-level project plan...\n"
-    yield mission_log, None
-    
-    architect_prompt = (
-        "You are The Architect. Create a high-level, logical, step-by-step plan in natural language to achieve the user's goal. "
-        "Do not write code. Just provide a numbered list of instructions for an expert developer to follow. "
-        "For example: 1. Create the main application file `app.py`. 2. Add Flask boilerplate to `app.py`... etc."
-    )
-    response = gemini_model.generate_content(f"{architect_prompt}\n\nUser Goal: {initial_prompt}")
-    
-    # The line that was causing the error
-    plan = [step.strip() for step in response.text.split('\n') if step.strip() and re.match(r'^\d+\.', step.strip())]
-    
-    if not plan:
-        mission_log += "Architect: [FATAL ERROR] Failed to create a valid plan.\n"
-        yield mission_log, None
-        return
-        
-    mission_log += f"Architect: Plan generated with {len(plan)} steps.\n"
-    yield mission_log, None
-
-    # Phase 2: Orchestrator executes the plan step-by-step
-    for i, step_instruction in enumerate(plan):
-        mission_log += f"\n--- Executing Plan Step {i+1}/{len(plan)} ---\n"
-        yield mission_log, gr.update(choices=os.listdir(PROJECT_DIR) or ["(empty)"])
-        
-        mission_log, success = execute_step(step_instruction, mission_log)
-        
-        if not success:
-            mission_log += f"Engine: [MISSION FAILED] The Master Craftsman could not complete step {i+1}. Aborting.\n"
-            yield mission_log, gr.update(choices=os.listdir(PROJECT_DIR) or ["(empty)"])
-            return
+            mission_log += f"Result: {result}\n"
+            yield mission_log, json.dumps(world_state, indent=2)
             
-        yield mission_log, gr.update(choices=os.listdir(PROJECT_DIR) or ["(empty)"])
+            tool_responses.append({"tool_call_id": tool_call.id, "role": "tool", "name": function_name, "content": result})
+        
+        conversation.extend(tool_responses)
 
-    mission_log += "\n--- MISSION COMPLETE ---"
-    yield mission_log, gr.update(choices=os.listdir(PROJECT_DIR) or ["(empty)"])
-
+    mission_log += "\n--- Max steps reached. Mission concluding. ---"
+    yield mission_log, json.dumps(world_state, indent=2)
 
 # --- GRADIO UI ---
-with gr.Blocks(theme=gr.themes.Soft(primary_hue="sky", secondary_hue="blue"), title="Helios Reborn") as demo:
-    gr.Markdown("# ☀️ Helios Reborn: The Autonomous AI Developer")
-    status_bar = gr.Textbox("System Offline. Click 'Activate Engines' to begin.", label="System Status", interactive=False)
+with gr.Blocks(theme=gr.themes.Monochrome(), title="World Model Framework") as demo:
+    gr.Markdown("# 🤖 World Model: The Autonomous AI Developer")
+    status_bar = gr.Textbox("System Offline. Click 'Activate Engine' to begin.", label="System Status", interactive=False)
     
     with gr.Row():
         with gr.Column(scale=1):
             gr.Markdown("### ⚙️ Controls")
-            activate_btn = gr.Button("Activate Engines")
-            gr.Markdown("### 🌳 Project Files")
-            file_tree = gr.Radio(label="File System", interactive=True)
+            activate_btn = gr.Button("Activate Engine")
+            gr.Markdown("### 🌍 World State")
+            world_state_view = gr.Code(label="File System View (JSON)", language="json", interactive=False)
         
         with gr.Column(scale=3):
             gr.Markdown("### 📝 Mission Control")
-            mission_prompt = gr.Textbox(label="High-Level Objective", placeholder="Build a simple Flask app that returns the current time as a JSON object.")
+            mission_prompt = gr.Textbox(label="High-Level Objective", placeholder="Build a simple Flask app that returns the current time.")
             launch_btn = gr.Button("🚀 Launch Mission", variant="primary", interactive=False)
             gr.Markdown("### 📜 Mission Log")
             mission_log_output = gr.Textbox(label="Live Log", lines=25, interactive=False, autoscroll=True)
@@ -198,7 +176,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="sky", secondary_hue="blue"), ti
         return {status_bar: gr.update(value=message), launch_btn: gr.update(interactive=success)}
     
     activate_btn.click(handle_activation, [], [status_bar, launch_btn])
-    launch_btn.click(fn=run_helios_reborn_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree])
+    launch_btn.click(fn=run_world_model_mission, inputs=[mission_prompt], outputs=[mission_log_output, world_state_view])
 
 if __name__ == "__main__":
     demo.launch(debug=True)
