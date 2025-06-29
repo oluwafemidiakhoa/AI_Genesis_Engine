@@ -8,14 +8,13 @@ import threading
 from queue import Queue
 import shutil
 import zipfile
-from io import BytesIO
 
 # --- CONFIGURATION & STATE ---
-PROJECT_DIR = "hyperion_project"
+PROJECT_DIR = "coda_project" # The final name for the final version
 openai_client = None
 app_process = None # Global handle for our running server process
 
-# --- THE HYPERION TOOLSET ---
+# --- THE CODA TOOLSET (Finalized) ---
 def list_files(path: str = ".") -> str:
     """Lists all files and directories in a given path within the project."""
     full_path = os.path.join(PROJECT_DIR, path)
@@ -70,20 +69,20 @@ def initialize_clients():
     try:
         openai_client = openai.OpenAI(api_key=openai_key)
         openai_client.models.list()
-        return "✅ Engine Online. Hyperion Framework is ready.", True
+        return "✅ Engine Online. The Coda Framework is ready.", True
     except Exception as e: return f"❌ API Initialization Failed: {e}", False
 
 def stream_process_output(process, queue):
+    """Reads output from a process and puts it into a queue for the UI."""
     for line in iter(process.stdout.readline, ''):
         queue.put(line)
     process.stdout.close()
 
-# --- THE HYPERION ORCHESTRATOR ---
-def run_hyperion_mission(initial_prompt, max_steps=15):
+# --- THE CODA ORCHESTRATOR ---
+def run_coda_mission(initial_prompt, max_steps=15):
     global app_process
     
     mission_log = "Mission Log: [START]\n"
-    # HYPERION UPGRADE: Yield an update for the download button at the start
     yield mission_log, gr.update(choices=[]), "", gr.update(visible=False, value=None)
 
     if os.path.exists(PROJECT_DIR):
@@ -91,7 +90,16 @@ def run_hyperion_mission(initial_prompt, max_steps=15):
     os.makedirs(PROJECT_DIR, exist_ok=True)
     
     conversation = [
-        {"role": "system", "content": "You are an autonomous AI developer... (same prompt as Ascension)"},
+        {
+            "role": "system",
+            "content": (
+                "You are an autonomous AI software developer. Your goal is to achieve the user's objective by calling a sequence of functions. "
+                "Think step-by-step. You have access to a file system and a shell. "
+                "CRITICAL: To run a web server or any long-running process, you MUST use the `launch_server` tool, not `run_shell_command`. "
+                "After launching the server, you can `finish_mission`. "
+                "Your workflow should be: 1. `write_file` for all code. 2. `write_file` for `requirements.txt`. 3. `run_shell_command` for `pip install`. 4. `launch_server` for `python app.py`. 5. `finish_mission`."
+            )
+        },
         {"role": "user", "content": f"Here is my objective: {initial_prompt}"}
     ]
     
@@ -113,26 +121,31 @@ def run_hyperion_mission(initial_prompt, max_steps=15):
         
         if not response_message.tool_calls: break
 
+        # CODA FIX: Restored the correct loop to handle multiple tool calls.
         tool_responses = []
         for tool_call in response_message.tool_calls:
             function_name = tool_call.function.name
+            # CODA FIX: Used the correct variable name 'function_args'.
             function_args = json.loads(tool_call.function.arguments)
+            
             mission_log += f"Action: Calling `{function_name}` with args: {function_args}\n"
             yield mission_log, gr.update(choices=os.listdir(PROJECT_DIR) or ["(empty)"]), "", None
             
             tool_function = globals()[function_name]
-            result = tool_function(**tool_args)
+            result = tool_function(**function_args)
             mission_log += f"Result: {result}\n"
             
             if function_name == "finish_mission":
                 mission_log += "--- MISSION COMPLETE ---"
+                
                 # Prepare and yield the download link
                 zip_path = os.path.join(PROJECT_DIR, "ai_generated_app.zip")
                 with zipfile.ZipFile(zip_path, 'w') as zf:
                     for root, _, files in os.walk(PROJECT_DIR):
                         for file in files:
                             if file != os.path.basename(zip_path):
-                                zf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), PROJECT_DIR))
+                                file_on_disk = os.path.join(root, file)
+                                zf.write(file_on_disk, os.path.relpath(file_on_disk, PROJECT_DIR))
                 
                 terminal_text = ""
                 if app_process:
@@ -140,7 +153,7 @@ def run_hyperion_mission(initial_prompt, max_steps=15):
                     thread = threading.Thread(target=stream_process_output, args=(app_process, output_queue))
                     thread.daemon = True
                     thread.start()
-                    time.sleep(2)
+                    time.sleep(2) # Wait for server to start up
                     while not output_queue.empty(): terminal_text += output_queue.get()
                 
                 yield mission_log, gr.update(choices=os.listdir(PROJECT_DIR) or ["(empty)"]), terminal_text, gr.update(visible=True, value=zip_path)
@@ -155,8 +168,8 @@ def run_hyperion_mission(initial_prompt, max_steps=15):
     yield mission_log, gr.update(choices=os.listdir(PROJECT_DIR) or ["(empty)"]), "", None
 
 # --- GRADIO UI (with Download Button) ---
-with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue"), title="Hyperion Framework") as demo:
-    gr.Markdown("# ✨ Hyperion: The Autonomous AI Developer")
+with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue"), title="Coda Framework") as demo:
+    gr.Markdown("# 🎼 Coda: The Autonomous AI Developer")
     status_bar = gr.Textbox("System Offline. Click 'Activate Engine' to begin.", label="System Status", interactive=False)
     
     with gr.Row():
@@ -165,7 +178,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue"), title="Hyperion Framewo
             activate_btn = gr.Button("Activate Engine")
             gr.Markdown("### 🌳 Project Files")
             file_tree = gr.Radio(label="File System", interactive=True, value=None)
-            # HYPERION UPGRADE: Added the download button
             download_zip_btn = gr.DownloadButton(label="Download Project as .zip", visible=False)
 
         with gr.Column(scale=3):
@@ -181,8 +193,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue"), title="Hyperion Framewo
         return {status_bar: gr.update(value=message), launch_btn: gr.update(interactive=success)}
     
     activate_btn.click(handle_activation, [], [status_bar, launch_btn])
-    # HYPERION UPGRADE: Added download button to the outputs list
-    launch_btn.click(fn=run_hyperion_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, live_terminal, download_zip_btn])
+    launch_btn.click(fn=run_coda_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, live_terminal, download_zip_btn])
 
 if __name__ == "__main__":
     demo.launch(debug=True)
