@@ -2,10 +2,20 @@ import gradio as gr
 from huggingface_hub import InferenceClient
 import os
 
-# It's a good practice to use an environment variable for your token.
-# Make sure to set your HUGGING_FACE_HUB_TOKEN in your environment.
-# If you don't, you can pass it directly: client = InferenceClient(token="hf_...")
-client = InferenceClient("moonshotai/Kimi-Dev-72B")
+# --- Authentication ---
+# This code now looks for the standard HF token OR the HF_API_KEY you used.
+# It reads the environment variable you set and uses it to authenticate.
+token = os.getenv("HUGGING_FACE_HUB_TOKEN") or os.getenv("HF_API_KEY")
+
+if not token:
+    # If neither variable is set, raise an error with clear instructions.
+    raise ValueError(
+        "Hugging Face authentication token not found. "
+        "Please set the HUGGING_FACE_HUB_TOKEN or HF_API_KEY environment variable."
+    )
+
+# Initialize the client with the token found.
+client = InferenceClient("moonshotai/Kimi-Dev-72B", token=token)
 
 # --- Pre-defined System Prompts for Different SE Tasks ---
 # This is the core of making the app specialized. Each prompt guides the AI.
@@ -45,13 +55,14 @@ def se_dev_assistant(user_input, task, max_tokens, temperature, top_p, repetitio
     Main function to process the user's request based on the selected task.
     """
     if not user_input.strip():
-        return "Error: Please provide some input (code or a description)."
+        # Using gr.Warning for a nicer user-facing message in the UI
+        gr.Warning("Input is empty. Please provide some code or a description.")
+        return "" # Return empty string to clear output on empty input
 
     # Get the specialized system prompt based on the user's selected task
     system_prompt = SYSTEM_PROMPTS.get(task, "You are a helpful AI assistant.")
 
     # Format the final prompt sent to the model
-    # Wrapping the user input in ``` helps the model identify it clearly.
     full_prompt = f"{system_prompt}\n\n--- User Request ---\n```\n{user_input}\n```"
 
     try:
@@ -67,8 +78,9 @@ def se_dev_assistant(user_input, task, max_tokens, temperature, top_p, repetitio
         )
         return result
     except Exception as e:
-        # Basic error handling
-        return f"An error occurred: {e}"
+        # Show a user-friendly error in the UI
+        gr.Error(f"An API error occurred: {e}")
+        return None # Return None to indicate an error
 
 # --- Building the Gradio UI with gr.Blocks ---
 with gr.Blocks(theme=gr.themes.Soft(), title="SE Dev Assistant") as demo:
@@ -95,7 +107,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="SE Dev Assistant") as demo:
                 temp_slider = gr.Slider(0.1, 1.0, value=0.7, step=0.05, label="Temperature")
                 top_p_slider = gr.Slider(0.1, 1.0, value=0.95, step=0.05, label="Top-p")
                 rep_penalty_slider = gr.Slider(1.0, 2.0, value=1.05, step=0.05, label="Repetition Penalty")
-            
+
             submit_btn = gr.Button("Generate", variant="primary")
 
         # Output Column
@@ -118,9 +130,10 @@ with gr.Blocks(theme=gr.themes.Soft(), title="SE Dev Assistant") as demo:
             top_p_slider,
             rep_penalty_slider
         ],
-        outputs=output_box
+        outputs=output_box,
+        api_name="se_dev_assistant" # Add an API name for programmatic access
     )
-    
+
     # Add some examples
     gr.Examples(
         examples=[
@@ -134,4 +147,4 @@ with gr.Blocks(theme=gr.themes.Soft(), title="SE Dev Assistant") as demo:
 
 if __name__ == "__main__":
     # Launch the Gradio app
-    demo.launch(debug=True) # Use debug=True for easier development
+    demo.launch(debug=True)
