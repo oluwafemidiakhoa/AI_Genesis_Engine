@@ -21,22 +21,24 @@ def web_search(query: str) -> str:
         snippets = [p.get_text() for p in soup.find_all('a', class_='result__a')]
         return "Search Results:\n" + "\n".join(f"- {s}" for s in snippets[:5]) if snippets else "No results found."
     except Exception as e: return f"Error during web search: {e}"
-def execute_shell_command(command: str) -> str:
+def execute_shell_command(command: str, cwd: str = PROJECT_DIR) -> str: # CHRONOS UPGRADE: Accept CWD
     try:
-        if not os.path.exists(PROJECT_DIR): os.makedirs(PROJECT_DIR)
-        print(f"Tooling Specialist: Executing shell command `{command}`...")
-        result = subprocess.run(command, shell=True, cwd=PROJECT_DIR, capture_output=True, text=True, timeout=120)
+        if "cd " in command: # CHRONOS UPGRADE: Handle cd command specially
+            new_dir = command.split("cd ")[1].strip()
+            target_path = os.path.join(cwd, new_dir)
+            if os.path.isdir(target_path):
+                return f"Successfully changed directory to {target_path}"
+            else:
+                return f"Error: Directory '{target_path}' not found."
+        
+        print(f"Tooling Specialist: Executing shell command `{command}` in `{cwd}`...")
+        result = subprocess.run(command, shell=True, cwd=cwd, capture_output=True, text=True, timeout=120)
         return f"$ {command}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     except Exception as e: return f"Error executing shell command: {e}"
 def write_file(path: str, content: str) -> str:
     full_path = os.path.join(PROJECT_DIR, path)
-    # DAEDALUS FIX: Handle the case where the parent is a file
-    parent_dir = os.path.dirname(full_path)
-    if os.path.exists(parent_dir) and not os.path.isdir(parent_dir):
-        return f"Error: Cannot create file because its parent '{parent_dir}' is an existing file, not a directory."
     try:
-        print(f"Tooling Specialist: Writing to file `{full_path}`...")
-        os.makedirs(parent_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
         with open(full_path, 'w', encoding='utf-8') as f: f.write(content)
         return f"Successfully wrote to {path}."
     except Exception as e: return f"Error writing to file: {e}"
@@ -55,11 +57,11 @@ def initialize_clients():
         openai_client = openai.OpenAI(api_key=openai_key)
         openai_client.models.list()
         genai.configure(api_key=google_key)
-        gemini_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest", tools=[web_search, execute_shell_command, write_file, read_file])
-        gemini_model.generate_content("ping", generation_config=genai.types.GenerationConfig(max_output_tokens=5))
-        return "✅ All engines are online. Daedalus awaits your command.", True
+        # Note: We pass the tools to the model when we want to use them.
+        gemini_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest")
+        gemini_model.generate_content("ping")
+        return "✅ All engines are online. Chronos awaits your command.", True
     except Exception as e: return f"❌ API Initialization Failed: {e}", False
-
 def parse_json_from_string(text: str) -> dict or list:
     match = re.search(r'```json\s*([\s\S]*?)\s*```|([\s\S]*)', text)
     if match:
@@ -68,10 +70,46 @@ def parse_json_from_string(text: str) -> dict or list:
         except json.JSONDecodeError as e: raise ValueError(f"Failed to decode JSON. Error: {e}. Text: '{json_str[:200]}...'")
     raise ValueError("No JSON found.")
 
-# --- ODYSSEY ORCHESTRATOR (UPGRADED WITH DAEDALUS LOGIC) ---
+# --- THE "SUPER-TOOL" FOR THE TOOLING SPECIALIST ---
+def execute_tooling_task(instruction: str, cwd: str):
+    """Lets Gemini decide which tool to use and executes it."""
+    # Create a temporary model instance with tools enabled
+    tooling_model = genai.GenerativeModel(
+        model_name="gemini-1.5-pro-latest",
+        tools=[web_search, execute_shell_command, write_file, read_file]
+    )
+    response = tooling_model.generate_content(instruction)
+    
+    # Check if a function call was returned
+    if not response.candidates or not response.candidates[0].content.parts or not response.candidates[0].content.parts[0].function_call:
+        return f"Tooling Specialist decided no tool was necessary for: '{instruction}'.", cwd
+
+    function_call = response.candidates[0].content.parts[0].function_call
+    tool_name = function_call.name
+    tool_args = dict(function_call.args)
+    tool_function = globals()[tool_name]
+    
+    # CHRONOS UPGRADE: Manage current working directory state
+    if tool_name == "execute_shell_command" and "cd " in tool_args.get("command", ""):
+        new_dir = tool_args["command"].split("cd ")[1].strip()
+        new_cwd = os.path.normpath(os.path.join(cwd, new_dir))
+        if os.path.isdir(new_cwd):
+            return f"Successfully changed directory to {new_cwd}", new_cwd
+        else:
+            return f"Error: Directory '{new_cwd}' not found.", cwd
+    elif tool_name == "execute_shell_command":
+        tool_args["cwd"] = cwd # Pass the current directory to the shell command
+
+    result = tool_function(**tool_args)
+    return result, cwd # Return the original cwd if not a cd command
+
+# --- ODYSSEY ORCHESTRATOR (UPGRADED WITH CHRONOS LOGIC) ---
 def run_odyssey(initial_prompt):
     mission_log = "Mission Log: [START]\n"
     yield mission_log, gr.update(choices=[])
+    
+    # Chronos State:
+    current_working_directory = PROJECT_DIR
     
     # Phase 1: Architect (Gemini)
     mission_log += "Architect (Gemini): Analyzing user request and creating a step-by-step project plan...\n"
@@ -81,10 +119,9 @@ def run_odyssey(initial_prompt):
         "You are The Architect, an expert AI system designer. Create a logical, step-by-step plan for the user's goal. "
         "The plan MUST be a valid JSON array of tasks. Each task is an object with `agent` and `instruction` keys. "
         "CRITICAL AGENT ROLES: "
-        "- Use 'Lead_Developer' ONLY for writing the application's source code files (e.g., .py, .js, .html). "
-        "- Use 'Tooling_Specialist' for ALL other actions: web searches, creating directories, writing non-source files (like requirements.txt), and running shell commands. "
-        "Do NOT assign shell commands or file system operations to the Lead_Developer. "
-        "Your entire response must be ONLY the raw JSON array."
+        "- Use 'Lead_Developer' for writing the application's source code files (e.g., .py, .js, .html, .css). "
+        "- Use 'Tooling_Specialist' for ALL other actions: web searches, creating directories, and running shell commands like 'pip' or 'python'. "
+        "Create efficient plans. For example, create all requirements in one step. Your entire response must be ONLY the raw JSON array."
     )
     gemini_json_config = genai.types.GenerationConfig(response_mime_type="application/json")
     try:
@@ -97,46 +134,30 @@ def run_odyssey(initial_prompt):
         yield mission_log, None
         return
 
-    # Phase 2: Execution Loop with Daedalus Delegation Logic
+    # Phase 2: Execution Loop with Chronos State Management
     current_files = {}
     for i, task in enumerate(task_list):
         task_num = i + 1
         instruction = task['instruction']
+        chosen_agent = task['agent']
         mission_log += f"\n--- Executing Task {task_num}/{len(task_list)} ---\n"
+        mission_log += f"Engine: Delegating to `{chosen_agent}`. Instruction: `{instruction}`\n"
         yield mission_log, gr.update(choices=list(current_files.keys()))
         time.sleep(1)
 
-        # --- DAEDALUS DELEGATION LOGIC ---
-        # The Orchestrator now intelligently overrides the Architect's mistakes.
-        chosen_agent = task['agent']
-        if any(keyword in instruction.lower() for keyword in ['run the command', 'install', 'pip', 'npm', 'execute']):
-            chosen_agent = 'Tooling_Specialist'
-        elif any(keyword in instruction.lower() for keyword in ['create a file', 'create a directory', 'add the following line to']):
-            if not any(ext in instruction for ext in ['.py', '.js', '.html', '.css', '.md']):
-                chosen_agent = 'Tooling_Specialist'
-        
-        if chosen_agent != task['agent']:
-             mission_log += f"Engine (Daedalus Override): Architect incorrectly assigned task. Re-delegating to `{chosen_agent}`.\n"
-        else:
-             mission_log += f"Engine: Delegating to `{chosen_agent}` as planned.\n"
-        mission_log += f"Instruction: `{instruction}`\n"
-        yield mission_log, gr.update(choices=list(current_files.keys()))
-
         try:
+            result = ""
             if chosen_agent == 'Lead_Developer':
+                # CHRONOS UPGRADE: Broadened role for Lead Developer
                 developer_prompt = (
-                    "You are the Lead Developer (GPT-4o). Write the code as instructed. Your output MUST be a JSON object with a single key `code`. "
-                    "If the instruction is NOT a request for source code, respond with {\"code\": \"# NOT A CODING TASK\"}."
+                    "You are the Lead Developer (GPT-4o). Your task is to write the full content for a single application file as instructed. "
+                    "This includes Python, JavaScript, HTML, CSS, Markdown, etc. "
+                    "Your output MUST be a JSON object with a single key `code` containing the full, raw code."
                 )
                 response = openai_client.chat.completions.create(model="gpt-4o", messages=[{"role": "system", "content": developer_prompt},{"role": "user", "content": instruction}], response_format={"type": "json_object"})
-                response_data = json.loads(response.choices[0].message.content)
-                code_content = response_data.get('code')
-
-                if not code_content or "# NOT A CODING TASK" in code_content:
-                    mission_log += "Lead Developer: Skipped task as it was not a valid code generation request.\n"
-                    continue
+                code_content = json.loads(response.choices[0].message.content)['code']
                 
-                file_path_prompt = "You are a file system manager. Based on the instruction, determine the correct file path. Respond with a JSON object with one key: `path`."
+                file_path_prompt = "You are a file system manager. Based on the instruction, determine the correct relative file path (e.g., `src/app.py`). Respond with a JSON object with one key: `path`."
                 response = gemini_model.generate_content(f"{file_path_prompt}\n\nInstruction: {instruction}", generation_config=gemini_json_config)
                 file_path = parse_json_from_string(response.text)['path']
                 
@@ -145,15 +166,11 @@ def run_odyssey(initial_prompt):
                 current_files[file_path] = code_content
             
             elif chosen_agent == 'Tooling_Specialist':
-                response = gemini_model.generate_content(instruction)
-                function_call = response.candidates[0].content.parts[0].function_call
-                tool_name = function_call.name
-                tool_args = dict(function_call.args)
-                tool_function = globals()[tool_name]
-                result = tool_function(**tool_args)
-                mission_log += f"Tooling Specialist: Executed `{tool_name}`. Result:\n---\n{result}\n---\n"
+                result, new_cwd = execute_tooling_task(instruction, current_working_directory)
+                current_working_directory = new_cwd # Update state
+                mission_log += f"Tooling Specialist Result:\n---\n{result}\n---\n"
 
-            if "Error:" in result:
+            if "Error:" in result or "ERROR:" in result:
                 mission_log += f"Engine: [TASK FAILED] An error occurred. Aborting mission.\n"
                 yield mission_log, gr.update(choices=list(current_files.keys()))
                 return
@@ -169,9 +186,8 @@ def run_odyssey(initial_prompt):
     yield mission_log, gr.update(choices=list(current_files.keys()))
 
 # --- GRADIO UI (No changes) ---
-with gr.Blocks(theme=gr.themes.Default(primary_hue="orange", secondary_hue="blue"), title="Daedalus Framework") as demo:
-    gr.Markdown("# 🏛️ Daedalus: An Intelligent AI Software Development Framework")
-    # ... The rest of the UI code is identical to the last version ...
+with gr.Blocks(theme=gr.themes.Default(primary_hue="orange", secondary_hue="blue"), title="Chronos Framework") as demo:
+    gr.Markdown("# ⌛ Chronos: An AI Development Framework with State & Memory")
     status_bar = gr.Textbox("System Offline. Click 'Activate Engines' to begin.", label="System Status", interactive=False)
     with gr.Row():
         with gr.Column(scale=1):
