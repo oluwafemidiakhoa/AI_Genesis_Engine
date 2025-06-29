@@ -16,25 +16,30 @@ PROJECT_DIR = "prometheus_project"
 openai_client, gemini_model = None, None
 app_process = None
 
-# --- TOOL DEFINITIONS (Simplified for clarity) ---
+# --- TOOL DEFINITIONS ---
+def list_files(path: str = ".") -> str:
+    full_path = os.path.join(PROJECT_DIR, path)
+    if not os.path.isdir(full_path): os.makedirs(full_path, exist_ok=True)
+    try:
+        files = os.listdir(full_path)
+        return "\n".join(files) if files else "(empty directory)"
+    except Exception as e: return f"Error listing files: {e}"
+
 def write_file(path: str, content: str) -> str:
-    """Writes content to a file."""
     full_path = os.path.join(PROJECT_DIR, path)
     try:
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         with open(full_path, 'w', encoding='utf-8') as f: f.write(content)
-        return f"Successfully wrote to {path}."
+        return f"Successfully wrote {len(content)} bytes to {path}."
     except Exception as e: return f"Error writing to file: {e}"
 
 def run_shell_command(command: str) -> str:
-    """Executes a short-lived shell command."""
     try:
         result = subprocess.run(command, shell=True, cwd=PROJECT_DIR, capture_output=True, text=True, timeout=120)
         return f"COMMAND:\n$ {command}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     except Exception as e: return f"Error executing shell command: {e}"
 
 def launch_server(command: str) -> str:
-    """Launches a long-running server process."""
     global app_process
     if app_process: app_process.kill()
     try:
@@ -43,7 +48,6 @@ def launch_server(command: str) -> str:
     except Exception as e: return f"Error launching server: {e}"
 
 def step_complete(reason: str) -> str:
-    """Marks a high-level step as complete."""
     return f"Step finished. Reason: {reason}"
 
 # --- INITIALIZATION ---
@@ -74,16 +78,10 @@ def run_promethean_mission(initial_prompt):
     if os.path.exists(PROJECT_DIR): shutil.rmtree(PROJECT_DIR)
     os.makedirs(PROJECT_DIR, exist_ok=True)
     
-    # --- PROMETHEAN FIRE: Phase 1 - Information Gathering ---
     mission_log += "Phase 1: Research Agent (Gemini) is gathering prerequisite knowledge...\n"
     yield mission_log, None, None, None
     
-    research_prompt = (
-        "You are a Research Agent. Your only job is to find the necessary information to complete the user's goal. "
-        "For a software project, this usually means finding the best public API and its exact endpoint URL, or the correct library names. "
-        "Be concise and factual. Provide only the information needed. "
-        f"User's Goal: {initial_prompt}"
-    )
+    research_prompt = "You are a Research Agent. Find the necessary information to complete the user's goal. Be concise and factual. User's Goal: " + initial_prompt
     try:
         research_response = gemini_model.generate_content(research_prompt)
         research_context = research_response.text
@@ -94,16 +92,10 @@ def run_promethean_mission(initial_prompt):
         yield mission_log, None, None, None
         return
 
-    # Phase 2: Architect (Gemini) creates the plan using the research
     mission_log += "Phase 2: Architect (Gemini) is creating a high-level plan...\n"
     yield mission_log, None, None, None
     
-    architect_prompt = (
-        "You are The Architect. You have been given research findings. "
-        "Create a high-level, logical, step-by-step plan in natural language for a developer to follow. "
-        "Do not include a research step, as it has already been done. "
-        "Just provide a numbered list of instructions to build the app."
-    )
+    architect_prompt = "You are The Architect. You have been given research findings. Create a high-level, logical, step-by-step plan in natural language for a developer to follow. Provide only a numbered list of instructions."
     context = f"Research Findings:\n{research_context}\n\nUser's Goal:\n{initial_prompt}"
     response = gemini_model.generate_content(f"{architect_prompt}\n\n{context}")
     plan = [step.strip() for step in response.text.split('\n') if step.strip() and re.match(r'^\d+\.', step.strip())]
@@ -116,7 +108,6 @@ def run_promethean_mission(initial_prompt):
     mission_log += f"Architect: Plan generated with {len(plan)} steps.\n"
     yield mission_log, None, None, None
 
-    # Phase 3: Master Craftsman (GPT-4o) executes the plan
     for i, step_instruction in enumerate(plan):
         mission_log += f"\n--- Executing Step {i+1}/{len(plan)} ---\n"
         yield mission_log, os.listdir(PROJECT_DIR) or ["(empty)"], "", None
@@ -130,7 +121,7 @@ def run_promethean_mission(initial_prompt):
             
         yield mission_log, os.listdir(PROJECT_DIR) or ["(empty)"], "", None
 
-    mission_log += "\n--- MISSION COMPLETE ---"
+    mission_log += "\n--- MISSION COMPLETE ---\n"
     
     zip_path = os.path.join(PROJECT_DIR, "promethean_app.zip")
     with zipfile.ZipFile(zip_path, 'w') as zf:
@@ -158,10 +149,27 @@ def execute_step(step_instruction: str, mission_log: str, context: str):
         {"role": "system", "content": "You are a Master Craftsman, an expert AI developer. Complete the user's high-level instruction by calling a sequence of functions. When the instruction is fully complete, you MUST call `step_complete`."},
         {"role": "user", "content": f"Relevant Information:\n{context}\n\nYour current task:\n{step_instruction}"}
     ]
-    tools = [{"type": "function", "function": fn} for fn in [list_files, write_file, run_shell_command, launch_server, step_complete]]
+    
+    # --- THIS IS THE FIX ---
+    # Create a dictionary of available tool functions
+    available_tools = {
+        "list_files": list_files,
+        "write_file": write_file,
+        "run_shell_command": run_shell_command,
+        "launch_server": launch_server,
+        "step_complete": step_complete,
+    }
+    # Format them for the OpenAI API
+    tools_for_api = [
+        {"type": "function", "function": {"name": "list_files", "description": "Lists files in a directory.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+        {"type": "function", "function": {"name": "write_file", "description": "Writes content to a file.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
+        {"type": "function", "function": {"name": "run_shell_command", "description": "Executes a short-lived command that finishes.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
+        {"type": "function", "function": {"name": "launch_server", "description": "Launches a long-running server process in the background.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
+        {"type": "function", "function": {"name": "step_complete", "description": "Call this when the current high-level step is finished.", "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]}}}
+    ]
 
     for _ in range(10):
-        response = openai_client.chat.completions.create(model="gpt-4o", messages=conversation, tools=tools, tool_choice="auto")
+        response = openai_client.chat.completions.create(model="gpt-4o", messages=conversation, tools=tools_for_api, tool_choice="auto")
         response_message = response.choices[0].message
         conversation.append(response_message)
         
@@ -178,7 +186,8 @@ def execute_step(step_instruction: str, mission_log: str, context: str):
                 mission_log += f"Craftsman: Step finished. Reason: {function_args.get('reason')}\n"
                 return mission_log, True
             
-            tool_function = globals()[function_name]
+            # Use the dictionary to find the function
+            tool_function = available_tools[function_name]
             result = tool_function(**function_args)
             mission_log += f"Tool Result: {result}\n"
             tool_responses.append({"tool_call_id": tool_call.id, "role": "tool", "name": function_name, "content": result})
@@ -191,7 +200,6 @@ def execute_step(step_instruction: str, mission_log: str, context: str):
 # --- GRADIO UI ---
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="orange", secondary_hue="red"), title="Promethean Framework") as demo:
     gr.Markdown("# 🔥 Promethean Fire: The AI Developer with Foresight")
-    # ... UI is the same ...
     status_bar = gr.Textbox("System Offline. Click 'Activate Engines' to begin.", label="System Status", interactive=False)
     with gr.Row():
         with gr.Column(scale=1):
