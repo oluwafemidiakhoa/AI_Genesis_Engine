@@ -4,7 +4,6 @@ import google.generativeai as genai
 import os
 import json
 import subprocess
-import requests
 import time
 import re
 import threading
@@ -13,83 +12,68 @@ import zipfile
 from io import BytesIO
 
 # --- CONFIGURATION & STATE ---
-PROJECT_DIR = "alpha_omega_project"
+PROJECT_DIR = "elysium_project"
 openai_client, gemini_model = None, None
 app_process = None
 
-# --- TOOLS (Finalized) ---
-def oracle_search(query: str) -> str:
-    serper_api_key = os.getenv("SERPER_API_KEY")
-    if not serper_api_key: return "Error: SERPER_API_KEY secret not found."
-    print(f"The Oracle: Performing direct web search for '{query}'...")
-    url, payload = "https://google.serper.dev/search", json.dumps({"q": query})
-    headers = {'X-API-KEY': serper_api_key, 'Content-Type': 'application/json'}
+# --- ELYSIUM UPGRADE: High-Level, Atomic Tools ---
+def create_directory(path: str) -> str:
+    """Creates a directory at the specified path within the project."""
+    full_path = os.path.join(PROJECT_DIR, path)
     try:
-        response = requests.request("POST", url, headers=headers, data=payload, timeout=10)
-        response.raise_for_status()
-        results = response.json()
-        summary = "Search Results:\n"
-        if "organic" in results:
-            for item in results["organic"][:4]:
-                summary += f"- Title: {item.get('title')}\n  Link: {item.get('link')}\n  Snippet: {item.get('snippet')}\n\n"
-        return summary
-    except Exception as e: return f"Error connecting to The Oracle: {e}"
+        os.makedirs(full_path, exist_ok=True)
+        return f"Successfully created directory: {path}"
+    except Exception as e: return f"Error creating directory: {e}"
 
-def execute_shell_command(command: str, cwd: str = PROJECT_DIR) -> (str, bool):
+def install_dependencies(requirements_path: str = "requirements.txt") -> str:
+    """Installs dependencies from a requirements.txt file in the project directory."""
+    full_req_path = os.path.join(PROJECT_DIR, requirements_path)
+    if not os.path.exists(full_req_path):
+        return f"Error: {requirements_path} not found."
     try:
-        print(f"Tooling Specialist: Executing shell command `{command}` in `{cwd}`...")
+        command = f"pip install -r {os.path.basename(full_req_path)}"
+        cwd = os.path.dirname(full_req_path)
         result = subprocess.run(command, shell=True, cwd=cwd, capture_output=True, text=True, timeout=120)
-        output = f"$ {command}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-        return output, result.returncode == 0
-    except Exception as e: return f"Error executing shell command: {e}", False
+        return f"$ {command}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    except Exception as e: return f"Error installing dependencies: {e}"
 
-def write_file(path: str, content: str, cwd: str = PROJECT_DIR) -> str:
-    full_path = os.path.join(cwd, path)
+def run_python_server(script_path: str) -> str:
+    """Runs a Python script (like a Flask server) as a background process."""
+    global app_process
+    if app_process: app_process.kill()
+    full_script_path = os.path.join(PROJECT_DIR, script_path)
+    if not os.path.exists(full_script_path):
+        return f"Error: Script '{script_path}' not found."
+    try:
+        command = f"python {os.path.basename(full_script_path)}"
+        cwd = os.path.dirname(full_script_path)
+        app_process = subprocess.Popen(command, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        return f"Successfully started background process for '{script_path}'."
+    except Exception as e: return f"Error starting background process: {e}"
+
+def write_file(path: str, content: str) -> str: # Simplified, now only used by Coder
+    full_path = os.path.join(PROJECT_DIR, path)
     try:
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         with open(full_path, 'w', encoding='utf-8') as f: f.write(content)
         return f"Successfully wrote to {path}."
     except Exception as e: return f"Error writing to file: {e}"
 
-def read_file(path: str, cwd: str = PROJECT_DIR) -> str:
-    # ... (same as before)
-    full_path = os.path.join(cwd, path)
-    try:
-        with open(full_path, 'r', encoding='utf-8') as f: return f.read()
-    except Exception as e: return f"Error reading file: {e}"
-
-def stream_process_output(process, queue):
-    # ... (same as before)
-    for line in iter(process.stdout.readline, ''): queue.put(line)
-    process.stdout.close()
-
-def run_background_app(command: str, cwd: str) -> str:
-    # ... (same as before)
-    global app_process
-    if app_process: app_process.kill()
-    try:
-        app_process = subprocess.Popen(command, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-        return f"Successfully started background process for '{command}'."
-    except Exception as e: return f"Error starting background process: {e}"
-
-# --- INITIALIZATION & UTILITIES ---
+# --- INITIALIZATION & UTILITIES (Finalized) ---
 def initialize_clients():
-    # ... (same as before)
     global openai_client, gemini_model
-    keys = {"OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"), "GOOGLE_API_KEY": os.getenv("GOOGLE_API_KEY"), "SERPER_API_KEY": os.getenv("SERPER_API_KEY")}
-    missing_keys = [k for k, v in keys.items() if not v]
-    if missing_keys: return f"❌ Missing Secrets: {', '.join(missing_keys)}", False
+    keys = {"OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"), "GOOGLE_API_KEY": os.getenv("GOOGLE_API_KEY")}
+    if not all(keys.values()): return "❌ Missing OpenAI or Google API Key.", False
     try:
         openai_client = openai.OpenAI(api_key=keys["OPENAI_API_KEY"])
         openai_client.models.list()
         genai.configure(api_key=keys["GOOGLE_API_KEY"])
         gemini_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest")
         gemini_model.generate_content("ping")
-        return "✅ All engines online. The Alpha & Omega Framework is ready.", True
+        return "✅ All engines online. The Elysium Framework is ready.", True
     except Exception as e: return f"❌ API Initialization Failed: {e}", False
 
 def parse_json_from_string(text: str) -> dict or list:
-    # ... (same as before)
     match = re.search(r'```json\s*([\s\S]*?)\s*```|([\s\S]*)', text)
     if match:
         json_str = match.group(1) or match.group(2)
@@ -97,75 +81,56 @@ def parse_json_from_string(text: str) -> dict or list:
         except json.JSONDecodeError as e: raise ValueError(f"Failed to decode JSON. Error: {e}. Text: '{json_str[:200]}...'")
     raise ValueError("No JSON found.")
 
-def execute_tooling_task(instruction: str, cwd: str):
-    # ... (same as before)
-    tooling_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest", tools=[oracle_search, execute_shell_command, write_file, read_file, run_background_app])
+def execute_tooling_task(instruction: str):
+    tooling_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest", tools=[create_directory, install_dependencies, run_python_server])
     response = tooling_model.generate_content(instruction)
     if not response.candidates or not response.candidates[0].content.parts or not response.candidates[0].content.parts[0].function_call:
-        return f"Tooling Specialist decided no tool was necessary.", cwd, True
+        return f"Tooling Specialist decided no tool was necessary.", True
     function_call = response.candidates[0].content.parts[0].function_call
     tool_name, tool_args = function_call.name, dict(function_call.args)
-    if tool_name in ["execute_shell_command", "run_background_app", "write_file", "read_file"]:
-        tool_args["cwd"] = cwd
-    if tool_name == "execute_shell_command" and tool_args.get("command", "").startswith("cd "):
-        new_dir = tool_args["command"].split("cd ", 1)[1].strip()
-        new_cwd = os.path.normpath(os.path.join(cwd, new_dir))
-        if os.path.isdir(new_cwd): return f"Successfully changed directory to {new_cwd}", new_cwd, True
-        else: return f"Error: Directory '{new_cwd}' not found.", cwd, False
     result = globals()[tool_name](**tool_args)
-    success = "Error" not in str(result) and "ERROR" not in str(result)
-    if isinstance(result, tuple): return result[0], cwd, result[1]
-    else: return result, cwd, success
+    success = "Error" not in str(result)
+    return result, success
 
-# --- THE ALPHA & OMEGA ORCHESTRATOR ---
-def run_alpha_omega_mission(initial_prompt):
+# --- THE ELYSIUM ORCHESTRATOR ---
+def run_elysium_mission(initial_prompt):
     mission_log = "Mission Log: [START]\n"
     yield mission_log, gr.update(choices=[]), "", gr.update(visible=False, value=None)
     
     os.makedirs(PROJECT_DIR, exist_ok=True)
     
-    # Phase 1: Architect plans
-    mission_log += "Architect (Gemini): Creating a high-level sequence of instructions...\n"
+    # Phase 1: Architect plans using the new high-level toolset
+    mission_log += "Architect (Gemini): Creating a high-level, tool-oriented project plan...\n"
     yield mission_log, None, None, None
     
-    # ALPHA & OMEGA UPGRADE: The final, perfected prompt.
     architect_prompt = (
-        "You are The Architect, an expert AI system designer. Create a logical, step-by-step plan to achieve the user's goal. "
-        "The plan MUST be a valid JSON array of tasks. Each task object should have a single key: `instruction`. "
-        "Be explicit and tool-oriented in your instructions. "
-        "For example, instead of 'Create a directory', say 'Run the command: mkdir my_app'. "
-        "Instead of 'search for libraries', say 'Use oracle_search to find libraries for X'. "
-        "Instead of 'install dependencies', say 'Run the command: pip install -r requirements.txt'. "
+        "You are The Architect. Create a logical, step-by-step plan to achieve the user's goal. "
+        "The plan MUST be a valid JSON array of tasks. Each task is an object with `agent` and `instruction` keys. "
+        "AGENT ROLES & TOOLS: "
+        "- 'Lead_Developer': Writes all application files (e.g., 'Create file `app.py` with Flask code...'). "
+        "- 'Tooling_Specialist': Uses specific tools. Frame instructions as commands for these tools: "
+        "  - `create_directory(path='...')` "
+        "  - `install_dependencies(requirements_path='...')` "
+        "  - `run_python_server(script_path='...')` "
         "Your entire response must be ONLY the raw JSON array."
     )
     gemini_json_config = genai.types.GenerationConfig(response_mime_type="application/json")
     try:
         response = gemini_model.generate_content(f"{architect_prompt}\n\nUser Goal: {initial_prompt}", generation_config=gemini_json_config)
         task_list = parse_json_from_string(response.text)
-        mission_log += f"Architect: Plan generated with {len(task_list)} tasks. Orchestrator will now assign agents.\n"
+        mission_log += f"Architect: Plan generated with {len(task_list)} tasks.\n"
         yield mission_log, None, None, None
     except Exception as e:
         mission_log += f"Architect: [FATAL ERROR] Failed to create a valid plan. Reason: {e}\n"
         yield mission_log, None, None, None
         return
 
-    # Phase 2: Execution Loop with perfected delegation
-    current_files, current_working_directory = {}, PROJECT_DIR
-    
-    # ALPHA & OMEGA UPGRADE: A more robust keyword list.
-    tooling_keywords = r'\b(run the command|mkdir|cd|pip|python|source|install|search)\b'
-    
+    # Phase 2: Execution Loop
+    current_files = {}
     for i, task in enumerate(task_list):
-        task_num, instruction = i + 1, task['instruction']
-        
-        # The Rule of Law: a regex search makes the keyword matching foolproof.
-        if re.search(tooling_keywords, instruction, re.IGNORECASE):
-            chosen_agent = 'Tooling_Specialist'
-        else:
-            chosen_agent = 'Lead_Developer'
-
+        task_num, instruction, chosen_agent = i + 1, task['instruction'], task['agent']
         mission_log += f"\n--- Executing Task {task_num}/{len(task_list)} ---\n"
-        mission_log += f"Engine (Alpha & Omega Protocol): Assigning `{chosen_agent}`. Instruction: `{instruction}`\n"
+        mission_log += f"Engine (Elysium Protocol): Delegating to `{chosen_agent}`. Instruction: `{instruction}`\n"
         yield mission_log, gr.update(choices=list(current_files.keys())), "", None
         time.sleep(1)
         
@@ -178,12 +143,12 @@ def run_alpha_omega_mission(initial_prompt):
                 file_path_prompt = "You are a file system manager. Based on the instruction, determine the correct relative file path. Respond with a JSON object with one key: `path`."
                 response = gemini_model.generate_content(f"{file_path_prompt}\n\nInstruction: {instruction}", generation_config=gemini_json_config)
                 file_path = parse_json_from_string(response.text)['path']
-                result = write_file(file_path, code_content, cwd=current_working_directory)
+                result = write_file(file_path, code_content)
                 mission_log += f"Lead Developer: Code generated. Result: {result}\n"
                 current_files[file_path] = code_content
                 success = "Error" not in result
             elif chosen_agent == 'Tooling_Specialist':
-                result, current_working_directory, success = execute_tooling_task(instruction, current_working_directory)
+                result, success = execute_tooling_task(instruction)
                 mission_log += f"Tooling Specialist Result:\n---\n{result}\n---\n"
             if not success:
                 mission_log += f"Engine: [TASK FAILED] An error occurred. Aborting mission.\n"
@@ -196,7 +161,7 @@ def run_alpha_omega_mission(initial_prompt):
             return
 
     # Finalization
-    mission_log += "\n--- Mission Complete ---"
+    mission_log += "\n--- Mission Complete ---\n"
     zip_path = os.path.join(PROJECT_DIR, "ai_generated_app.zip")
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         for root, dirs, files_on_disk in os.walk(PROJECT_DIR):
@@ -208,9 +173,8 @@ def run_alpha_omega_mission(initial_prompt):
     yield mission_log, gr.update(choices=list(current_files.keys())), "", gr.update(visible=True, value=zip_path)
 
 # --- GRADIO UI ---
-with gr.Blocks(theme=gr.themes.Default(primary_hue="blue", secondary_hue="indigo"), title="Alpha & Omega Framework") as demo:
-    gr.Markdown("# 🌌 Alpha & Omega: The Autonomous AI Developer")
-    # ... UI is the same ...
+with gr.Blocks(theme=gr.themes.Default(primary_hue="emerald", secondary_hue="green"), title="Elysium Framework") as demo:
+    gr.Markdown("# ✨ Elysium: The Autonomous AI Developer")
     status_bar = gr.Textbox("System Offline. Click 'Activate Engines' to begin.", label="System Status", interactive=False)
     with gr.Row():
         with gr.Column(scale=1):
@@ -221,7 +185,7 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="blue", secondary_hue="indigo
             download_zip_btn = gr.DownloadButton(label="Download Project as .zip", visible=False)
         with gr.Column(scale=3):
             gr.Markdown("### 📝 Mission Control")
-            mission_prompt = gr.Textbox(label="High-Level Objective", placeholder="e.g., Build a real-time stock dashboard using the Yahoo Finance API.")
+            mission_prompt = gr.Textbox(label="High-Level Objective", placeholder="e.g., Build a Python Flask web app that generates a QR code from user text input.")
             launch_btn = gr.Button("🚀 Launch Mission", variant="primary", interactive=False)
             gr.Markdown("### 📜 Mission Log")
             mission_log_output = gr.Textbox(label="Mission Log", lines=20, interactive=False, autoscroll=True)
@@ -229,7 +193,7 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="blue", secondary_hue="indigo
         message, success = initialize_clients()
         return {status_bar: gr.update(value=message), launch_btn: gr.update(interactive=success)}
     activate_btn.click(handle_activation, [], [status_bar, launch_btn])
-    launch_btn.click(fn=run_alpha_omega_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, gr.Textbox(visible=False), download_zip_btn])
+    launch_btn.click(fn=run_elysium_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, gr.Textbox(visible=False), download_zip_btn])
 
 if __name__ == "__main__":
     demo.launch(debug=True)
