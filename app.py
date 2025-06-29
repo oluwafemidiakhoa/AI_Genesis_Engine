@@ -6,6 +6,7 @@ import json
 import subprocess
 import time
 import shutil
+import re # <--- THE MISSING IMPORT IS NOW HERE.
 
 # --- CONFIGURATION & STATE ---
 PROJECT_DIR = "metropolis_project"
@@ -26,6 +27,8 @@ def write_file(path: str, content: str) -> str:
 def run_shell_command(command: str) -> str:
     """Executes a shell command in the project directory."""
     try:
+        # For simplicity in this final version, we run all shell commands from the root.
+        # A more complex agent could manage its own 'cd' state if needed.
         result = subprocess.run(command, shell=True, cwd=PROJECT_DIR, capture_output=True, text=True, timeout=120)
         return f"COMMAND:\n$ {command}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     except Exception as e:
@@ -46,12 +49,15 @@ def initialize_clients():
         openai_client = openai.OpenAI(api_key=openai_key)
         genai.configure(api_key=google_key)
         gemini_model = genai.GenerativeModel("gemini-1.5-pro-latest")
+        # Test calls
+        openai_client.models.list()
+        gemini_model.generate_content("ping")
         return "✅ All engines online. Metropolis is ready to build.", True
     except Exception as e:
         return f"❌ API Initialization Failed: {e}", False
 
 # --- THE METROPOLIS ORCHESTRATOR ---
-def run_metropolis_mission(initial_prompt, max_steps=20):
+def run_metropolis_mission(initial_prompt):
     mission_log = "Mission Log: [START]\n"
     yield mission_log, gr.update(choices=[])
 
@@ -71,10 +77,12 @@ def run_metropolis_mission(initial_prompt, max_steps=20):
         "2. Implement the frontend HTML for the main page using Tailwind CSS. "
         "3. Implement the backend server logic in a file named `app.py`. "
         "4. Create a `requirements.txt` file. "
-        "5. Install dependencies. "
-        "6. Run the application."
+        "5. Install dependencies using a shell command. "
+        "6. Run the application using a shell command."
     )
     response = gemini_model.generate_content(f"{architect_prompt}\n\nUser Goal: {initial_prompt}")
+    
+    # This is the line that was previously crashing.
     plan = [step.strip() for step in response.text.split('\n') if step.strip() and re.match(r'^\d+\.', step.strip())]
     
     if not plan:
@@ -90,8 +98,9 @@ def run_metropolis_mission(initial_prompt, max_steps=20):
     for i, step_instruction in enumerate(plan):
         mission_log += f"\n--- Executing Step {i+1}/{len(plan)}: {step_instruction} ---\n"
         yield mission_log, gr.update(choices=os.listdir(PROJECT_DIR) or ["(empty)"])
+        time.sleep(1)
         
-        # Determine agent based on instruction
+        # Determine agent based on instruction keywords
         if "design the ui" in step_instruction.lower():
             agent_name = "UI/UX Designer"
             mission_log += f"Engine: Delegating to {agent_name} (Gemini)...\n"
@@ -107,7 +116,7 @@ def run_metropolis_mission(initial_prompt, max_steps=20):
             design_spec = response.text
             mission_log += f"Designer's Spec:\n---\n{design_spec}\n---\n"
 
-        elif "implement the frontend" in step_instruction.lower():
+        elif "implement the frontend" in step_instruction.lower() or ".html" in step_instruction.lower():
             agent_name = "Frontend Engineer"
             mission_log += f"Engine: Delegating to {agent_name} (GPT-4o)...\n"
             yield mission_log, None
@@ -126,16 +135,20 @@ def run_metropolis_mission(initial_prompt, max_steps=20):
                     {"role": "user", "content": context}
                 ]
             )
-            code_content = response.choices[0].message.content
-            write_file("templates/index.html", code_content)
-            mission_log += "Frontend Engineer: Wrote `templates/index.html`.\n"
+            code_content = response.choices[0].message.content.strip().replace("```html", "").replace("```", "")
+            
+            # Determine file path from instruction
+            path_match = re.search(r"named `([^`]+)`", step_instruction)
+            file_path = path_match.group(1) if path_match else "templates/index.html"
+            
+            result = write_file(file_path, code_content)
+            mission_log += f"Frontend Engineer: Wrote `{file_path}`. Result: {result}\n"
 
         else: # Default to the backend/tooling agent for all other tasks
             agent_name = "Backend Developer & Tooling Specialist"
             mission_log += f"Engine: Delegating to {agent_name} (GPT-4o)...\n"
             yield mission_log, None
             
-            # This agent uses the function-calling loop from the Singularity framework
             conversation = [
                 {"role": "system", "content": "You are an expert Backend Developer and Tooling Specialist. Execute the user's instruction by calling the appropriate function. Call `finish_mission` when the entire project is complete and running."},
                 {"role": "user", "content": step_instruction}
