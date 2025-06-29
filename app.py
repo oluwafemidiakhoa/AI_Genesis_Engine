@@ -7,12 +7,13 @@ import subprocess
 import requests
 from bs4 import BeautifulSoup
 import time
+import re
 
 # --- CONFIGURATION & STATE ---
 PROJECT_DIR = "odyssey_project"
 openai_client, gemini_model = None, None
 
-# --- TOOLS ---
+# --- TOOLS (No changes) ---
 def web_search(query: str) -> str:
     try:
         print(f"Tooling Specialist: Performing web search for '{query}'...")
@@ -45,34 +46,44 @@ def read_file(path: str) -> str:
         with open(full_path, 'r', encoding='utf-8') as f: return f.read()
     except Exception as e: return f"Error reading file: {e}"
 
-# --- API & AGENT INITIALIZATION ---
+
+# --- API & AGENT INITIALIZATION (No changes from last version) ---
 def initialize_clients():
-    """Reads keys from environment secrets and initializes clients."""
     global openai_client, gemini_model
     openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
+        return "❌ Missing Secret: `OPENAI_API_KEY` not found.", False
     google_key = os.getenv("GOOGLE_API_KEY")
-    
-    if not openai_key or not google_key:
-        return "❌ Missing Secrets: Please set `OPENAI_API_KEY` and `GOOGLE_API_KEY` in your Space's repository secrets and restart the Space.", False
-
+    if not google_key:
+        return "❌ Missing Secret: `GOOGLE_API_KEY` not found.", False
     try:
-        # Initialize and test OpenAI
         openai_client = openai.OpenAI(api_key=openai_key)
         openai_client.models.list()
-        
-        # Initialize and test Gemini
         genai.configure(api_key=google_key)
         gemini_model = genai.GenerativeModel(
             model_name="gemini-1.5-pro-latest",
             tools=[web_search, execute_shell_command, write_file, read_file]
         )
         gemini_model.generate_content("ping", generation_config=genai.types.GenerationConfig(max_output_tokens=5))
-        
         return "✅ All engines are online. The Odyssey awaits your command.", True
     except Exception as e:
         return f"❌ API Initialization Failed: {e}", False
 
-# --- ODYSSEY ORCHESTRATOR ---
+# --- UTILITY FUNCTION FOR RESILIENT PARSING ---
+def parse_json_from_string(text: str) -> dict or list:
+    """Finds and parses the first valid JSON object or array in a string."""
+    # Regex to find content between ```json and ``` or the first `{` or `[` to the last `}` or `]`
+    match = re.search(r'```json\s*([\s\S]*?)\s*```|([\s\S]*)', text)
+    if match:
+        json_str = match.group(1) or match.group(2)
+        try:
+            return json.loads(json_str.strip())
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to decode JSON after extraction. Error: {e}. Extracted text: '{json_str[:200]}...'")
+    raise ValueError("No JSON object or array found in the AI response.")
+
+
+# --- ODYSSEY ORCHESTRATOR (UPGRADED WITH AEGIS PROTOCOL) ---
 def run_odyssey(initial_prompt):
     if not openai_client or not gemini_model:
         yield "Mission Log: [ERROR] API clients not initialized. Activate the engines first.", None
@@ -81,18 +92,30 @@ def run_odyssey(initial_prompt):
     mission_log = "Mission Log: [START]\n"
     yield mission_log, gr.update(choices=[])
     
-    # Phase 1: Architect
+    # Phase 1: Architect (Gemini) creates the plan with AEGIS protocol
     mission_log += "Architect (Gemini): Analyzing user request and creating a step-by-step project plan...\n"
     yield mission_log, None
+    
+    # UPGRADE: More robust prompt
     architect_prompt = (
-        "You are The Architect, a world-class AI system designer. Your job is to take a user's high-level goal and break it down into a detailed, "
-        "step-by-step plan. The plan should be a JSON array of tasks. Each task must be an object with two keys: "
-        "`agent` (either 'Lead_Developer' for writing app code, or 'Tooling_Specialist' for using tools) and `instruction` "
-        "(a clear, specific command for that agent). Be logical and thorough. Output ONLY the raw JSON array."
+        "You are The Architect, an expert AI system designer. Your ONLY task is to create a step-by-step plan for the user's goal. "
+        "The plan MUST be a valid JSON array of tasks. Each task is an object with two keys: `agent` (either 'Lead_Developer' or 'Tooling_Specialist') "
+        "and `instruction` (a clear command for that agent). "
+        "CRITICAL: Do NOT output any text, explanations, or markdown fences like ```json. Your entire response must be ONLY the raw JSON array, starting with `[` and ending with `]`."
     )
+    
+    # UPGRADE: Enforce JSON response from the API
+    gemini_json_config = genai.types.GenerationConfig(
+        response_mime_type="application/json"
+    )
+    
     try:
-        response = gemini_model.generate_content(f"{architect_prompt}\n\nUser Goal: {initial_prompt}")
-        task_list = json.loads(response.text)
+        response = gemini_model.generate_content(
+            f"{architect_prompt}\n\nUser Goal: {initial_prompt}",
+            generation_config=gemini_json_config
+        )
+        # UPGRADE: Use the resilient parser
+        task_list = parse_json_from_string(response.text)
         mission_log += f"Architect: Plan generated with {len(task_list)} tasks.\n"
         yield mission_log, None
     except Exception as e:
@@ -100,7 +123,7 @@ def run_odyssey(initial_prompt):
         yield mission_log, None
         return
 
-    # Phase 2: Execution Loop
+    # Phase 2: Execution Loop (No changes needed here, the logic is sound)
     current_files = {}
     for i, task in enumerate(task_list):
         task_num = i + 1
@@ -112,19 +135,18 @@ def run_odyssey(initial_prompt):
         try:
             if task['agent'] == 'Lead_Developer':
                 developer_prompt = (
-                    "You are the Lead Developer, an expert coder using GPT-4o. Your task is to write the code as instructed. "
-                    "Your output MUST be a JSON object containing a single key `code` with the full, raw code as its value. "
-                    "Do not add any explanations or other text. Just the JSON."
+                    "You are the Lead Developer, an expert coder using GPT-4o. Write the code as instructed. "
+                    "Your output MUST be a JSON object with a single key `code` containing the full, raw code."
                 )
                 response = openai_client.chat.completions.create(model="gpt-4o", messages=[{"role": "system", "content": developer_prompt},{"role": "user", "content": task['instruction']}], response_format={"type": "json_object"})
                 code_content = json.loads(response.choices[0].message.content)['code']
                 
                 file_path_prompt = (
-                    "You are a file system manager. Based on the user instruction and the generated code, determine the correct file path to save this code to. "
-                    "Respond with a JSON object with one key: `path`. For example: {\"path\": \"src/main.py\"}."
+                    "You are a file system manager. Based on the instruction and code, determine the correct file path. "
+                    "Respond with a JSON object with one key: `path`."
                 )
-                response = gemini_model.generate_content(f"{file_path_prompt}\n\nInstruction: {task['instruction']}\n\nCode:\n{code_content}")
-                file_path = json.loads(response.text)['path']
+                response = gemini_model.generate_content(f"{file_path_prompt}\n\nInstruction: {task['instruction']}\n\nCode:\n{code_content}", generation_config=gemini_json_config)
+                file_path = parse_json_from_string(response.text)['path']
                 result = write_file(file_path, code_content)
                 mission_log += f"Lead Developer: Code generated. Result: {result}\n"
                 current_files[file_path] = code_content
@@ -148,7 +170,7 @@ def run_odyssey(initial_prompt):
     mission_log += "\n--- Mission Complete ---"
     yield mission_log, gr.update(choices=list(current_files.keys()))
 
-# --- GRADIO UI ---
+# --- GRADIO UI (No changes) ---
 with gr.Blocks(theme=gr.themes.Default(primary_hue="orange", secondary_hue="blue"), title="Odyssey Framework") as demo:
     gr.Markdown("# 🚀 Odyssey: An Autonomous AI Software Development Framework")
     status_bar = gr.Textbox("System Offline. Click 'Activate Engines' to begin.", label="System Status", interactive=False)
@@ -170,10 +192,7 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="orange", secondary_hue="blue
 
     def handle_activation():
         message, success = initialize_clients()
-        return {
-            status_bar: gr.update(value=message),
-            launch_btn: gr.update(interactive=success)
-        }
+        return {status_bar: gr.update(value=message), launch_btn: gr.update(interactive=success)}
     
     activate_btn.click(handle_activation, [], [status_bar, launch_btn])
     
