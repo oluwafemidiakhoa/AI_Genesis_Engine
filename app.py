@@ -1,36 +1,32 @@
 import gradio as gr
 import openai
-import google.generativeai as genai
 import os
 import json
 import subprocess
 import time
 import shutil
-import re
-import requests
+import threading
+from queue import Queue
+import zipfile
 
 # --- CONFIGURATION & STATE ---
-PROJECT_DIR = "cosmic_forge_project"
-openai_client, gemini_model = None, None
+PROJECT_DIR = "genesis_project"
+openai_client = None
+app_process = None
 
-# --- TOOL DEFINITIONS ---
-def web_search(query: str) -> str:
-    """Performs a direct, programmatic web search using the Serper.dev API for maximum reliability."""
-    serper_api_key = os.getenv("SERPER_API_KEY")
-    if not serper_api_key: return "Error: SERPER_API_KEY secret not found."
-    print(f"Tooling Agent: Performing web search for '{query}'...")
+# --- THE GENESIS TOOLSET ---
+def list_files(path: str = ".") -> str:
+    """Lists all files and directories in a given path within the project."""
+    full_path = os.path.join(PROJECT_DIR, path)
+    if not os.path.isdir(full_path):
+        return f"Error: Directory '{path}' does not exist."
     try:
-        response = requests.post("https://google.serper.dev/search", headers={'X-API-KEY': serper_api_key, 'Content-Type': 'application/json'}, data=json.dumps({"q": query}))
-        response.raise_for_status()
-        results = response.json()
-        summary = "Search Results:\n"
-        if "organic" in results:
-            for item in results["organic"][:5]:
-                summary += f"- Title: {item.get('title')}\n  Link: {item.get('link')}\n  Snippet: {item.get('snippet')}\n\n"
-        return summary
-    except Exception as e: return f"Error during web search: {e}"
+        files = os.listdir(full_path)
+        return "\n".join(files) if files else "(empty directory)"
+    except Exception as e: return f"Error listing files: {e}"
 
 def write_file(path: str, content: str) -> str:
+    """Writes or overwrites a file with the given content."""
     full_path = os.path.join(PROJECT_DIR, path)
     try:
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
@@ -39,154 +35,164 @@ def write_file(path: str, content: str) -> str:
     except Exception as e: return f"Error writing to file: {e}"
 
 def run_shell_command(command: str) -> str:
+    """Executes a short-lived shell command and returns its output."""
     try:
-        result = subprocess.run(command, shell=True, cwd=PROJECT_DIR, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(command, shell=True, cwd=PROJECT_DIR, capture_output=True, text=True, timeout=120)
         return f"COMMAND:\n$ {command}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     except Exception as e: return f"Error executing shell command: {e}"
 
+def launch_server(command: str) -> str:
+    """Launches a long-running server process in the background."""
+    global app_process
+    if app_process: app_process.kill()
+    try:
+        app_process = subprocess.Popen(
+            command, shell=True, cwd=PROJECT_DIR, 
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+            text=True, bufsize=1, universal_newlines=True
+        )
+        return f"Successfully launched server process with command: '{command}'. It is now running in the background."
+    except Exception as e: return f"Error launching server: {e}"
+
+def finish_mission(reason: str) -> str:
+    """Call this when the user's objective is complete."""
+    return f"Mission finished. Reason: {reason}"
+
 # --- INITIALIZATION ---
 def initialize_clients():
-    global openai_client, gemini_model
-    keys = {"OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"), "GOOGLE_API_KEY": os.getenv("GOOGLE_API_KEY"), "SERPER_API_KEY": os.getenv("SERPER_API_KEY")}
-    missing_keys = [k for k, v in keys.items() if not v]
-    if missing_keys: return f"❌ Missing Secrets: {', '.join(missing_keys)}", False
+    global openai_client
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key: return "❌ Missing Secret: `OPENAI_API_KEY`", False
     try:
-        openai_client = openai.OpenAI(api_key=keys["OPENAI_API_KEY"])
-        genai.configure(api_key=keys["GOOGLE_API_KEY"])
-        gemini_model = genai.GenerativeModel("gemini-1.5-pro-latest")
-        return "✅ All systems online. The Cosmic Forge is active.", True
+        openai_client = openai.OpenAI(api_key=openai_key)
+        openai_client.models.list()
+        return "✅ Engine Online. The Genesis Framework is ready.", True
     except Exception as e: return f"❌ API Initialization Failed: {e}", False
 
-def parse_json_from_string(text: str) -> dict or list:
-    match = re.search(r'```json\s*([\s\S]*?)\s*```|([\s\S]*)', text)
-    json_str = (match.group(1) or match.group(2)).strip()
-    try: return json.loads(json_str)
-    except json.JSONDecodeError as e: raise ValueError(f"Failed to decode JSON. Text: '{json_str[:200]}...'")
+# --- UTILITIES ---
+def stream_process_output(process, queue):
+    for line in iter(process.stdout.readline, ''): queue.put(line)
+    process.stdout.close()
 
-# --- THE COSMIC FORGE ORCHESTRATOR ---
-def run_cosmic_forge(initial_prompt):
-    mission_log = "[MISSION LOG: START]\n"
-    yield mission_log, gr.update(visible=False)
+# --- THE GENESIS ORCHESTRATOR ---
+def run_genesis_mission(initial_prompt, max_steps=25):
+    global app_process
+    
+    mission_log = "Mission Log: [START]\n"
+    yield mission_log, [], "", gr.update(visible=False, value=None)
 
     if os.path.exists(PROJECT_DIR): shutil.rmtree(PROJECT_DIR)
     os.makedirs(PROJECT_DIR, exist_ok=True)
-
-    # 1. The Strategist creates the high-level component plan
-    mission_log += "--- Phase: Strategy ---\n"
-    mission_log += "Strategist (Gemini): Designing high-level component architecture...\n"
-    yield mission_log, None
-
-    strategist_prompt = ("You are The Strategist, a CTO-level AI. Analyze the user's request and define the major software components required to build it. "
-                         "Your output MUST be a JSON object with a single key 'components', which is an array of strings. "
-                         "Example: {\"components\": [\"UserAuthenticationAPI\", \"DataProcessingService\", \"ReactFrontend\"]}")
-    try:
-        response = gemini_model.generate_content(f"{strategist_prompt}\n\nUser Request: {initial_prompt}", generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
-        strategy = parse_json_from_string(response.text)
-        components = strategy.get("components", [])
-        mission_log += f"Strategist: Plan involves {len(components)} components: {', '.join(components)}\n"
-        yield mission_log, None
-    except Exception as e:
-        mission_log += f"[FATAL ERROR] The Strategist failed to create a valid plan: {e}\n"
-        yield mission_log, None
-        return
-
-    # 2. The Orchestrator iterates through each component, attempting to build it
-    for component in components:
-        mission_log += f"\n--- Phase: Building Component: {component} ---\n"
-        yield mission_log, None
+    
+    conversation = [
+        {
+            "role": "system",
+            "content": (
+                "You are an autonomous AI software developer. Your goal is to achieve the user's objective by calling a sequence of functions. "
+                "Think step-by-step. You have access to a file system and a shell. "
+                "CRITICAL: To run a web server or any long-running process, you MUST use the `launch_server` tool, not `run_shell_command`. "
+                "After launching the server, you can `finish_mission`. "
+                "A standard workflow is: 1. `write_file` for all code and `requirements.txt`. 2. `run_shell_command` for `pip install`. 3. `launch_server`. 4. `finish_mission`."
+            )
+        },
+        {"role": "user", "content": f"My objective is: {initial_prompt}"}
+    ]
+    
+    tools = [
+        {"type": "function", "function": {"name": "list_files", "description": "Lists files in a directory.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+        {"type": "function", "function": {"name": "write_file", "description": "Writes content to a file.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
+        {"type": "function", "function": {"name": "run_shell_command", "description": "Executes a short-lived command that finishes.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
+        {"type": "function", "function": {"name": "launch_server", "description": "Launches a long-running server process in the background.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
+        {"type": "function", "function": {"name": "finish_mission", "description": "Call this when the objective is complete.", "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]}}}
+    ]
+    
+    for i in range(max_steps):
+        mission_log += f"\n--- Step {i+1}/{max_steps} ---\nAI is thinking...\n"
+        yield mission_log, os.listdir(PROJECT_DIR) or [], "", None
         
-        last_error = ""
-        for attempt in range(3): # Allow up to 3 self-healing attempts per component
-            mission_log += f"Build Attempt {attempt + 1}/3 for {component}...\n"
+        try:
+            response = openai_client.chat.completions.create(model="gpt-4o", messages=conversation, tools=tools, tool_choice="auto")
+            response_message = response.choices[0].message
+            conversation.append(response_message)
             
-            # 2a. The Task Decomposer creates a micro-plan
-            mission_log += f"Task Decomposer (GPT-4o): Breaking down '{component}' into executable steps...\n"
-            yield mission_log, None
-            
-            decomposer_prompt = ("You are The Task Decomposer. Given a software component to build and an error from a previous attempt (if any), "
-                                 "create a detailed, step-by-step checklist of tool calls to build it. Your output must be a JSON object with a key 'tasks', "
-                                 "which is an array of objects. Each object must have `tool_name` and `parameters` keys.")
-            context = f"Component to build: {component}.\nUser's main goal: {initial_prompt}.\n"
-            if last_error:
-                context += f"Last attempt failed. Error report: {last_error}. Create a new plan to fix this."
+            if not response_message.tool_calls:
+                mission_log += "AI chose not to call a tool. Finishing mission due to inactivity.\n"
+                break
 
-            response = openai_client.chat.completions.create(model="gpt-4o", messages=[{"role": "system", "content": decomposer_prompt}, {"role": "user", "content": context}], response_format={"type": "json_object"})
-            micro_plan = json.loads(response.choices[0].message.content).get("tasks", [])
-            
-            # 2b. The Executor runs the micro-plan
-            execution_summary = ""
-            for task in micro_plan:
-                tool_name = task.get("tool_name")
-                parameters = task.get("parameters", {})
-                mission_log += f"Executor: Calling tool `{tool_name}` with parameters: {parameters}\n"
-                yield mission_log, None
+            # GENESIS FIX: Handle multiple tool calls in a single turn
+            tool_responses = []
+            for tool_call in response_message.tool_calls:
+                function_name = tool_call.function.name
+                function_args = json.loads(tool_call.function.arguments)
                 
-                try:
-                    result = globals()[tool_name](**parameters)
-                    mission_log += f"Executor Result:\n---\n{result}\n---\n"
-                    execution_summary += f"Task '{tool_name}' result: {result}\n"
-                except Exception as e:
-                    execution_summary += f"Task '{tool_name}' failed: {e}\n"
-                    mission_log += f"[ERROR] Executor failed to run tool: {e}\n"
+                mission_log += f"Action: Calling `{function_name}` with args: {function_args}\n"
+                yield mission_log, os.listdir(PROJECT_DIR) or [], "", None
+                
+                tool_function = globals()[function_name]
+                result = tool_function(**function_args)
+                mission_log += f"Result:\n---\n{result}\n---\n"
+                
+                if function_name == "finish_mission":
+                    mission_log += "--- MISSION COMPLETE ---"
+                    zip_path = os.path.join(PROJECT_DIR, "genesis_app.zip")
+                    with zipfile.ZipFile(zip_path, 'w') as zf:
+                        for root, _, files in os.walk(PROJECT_DIR):
+                            for file in files:
+                                if file != os.path.basename(zip_path):
+                                    zf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), PROJECT_DIR))
+                    
+                    terminal_text = ""
+                    if app_process:
+                        output_queue = Queue()
+                        thread = threading.Thread(target=stream_process_output, args=(app_process, output_queue))
+                        thread.daemon = True
+                        thread.start()
+                        time.sleep(2)
+                        while not output_queue.empty(): terminal_text += output_queue.get()
+                    
+                    yield mission_log, os.listdir(PROJECT_DIR) or [], terminal_text, gr.update(visible=True, value=zip_path)
+                    return
 
-            # 2c. The Code Reviewer inspects the work
-            mission_log += f"Code Reviewer (Gemini): Reviewing the result for '{component}'...\n"
-            yield mission_log, None
+                tool_responses.append({"tool_call_id": tool_call.id, "role": "tool", "name": function_name, "content": result})
             
-            reviewer_prompt = ("You are The Code Reviewer. Given the original goal for a component and a summary of the execution, "
-                               "determine if the component was built successfully. Your output must be a JSON object with keys "
-                               "`status` ('success' or 'failure') and `reason` (a brief explanation).")
-            context = f"Component Goal: {component}.\nExecution Summary:\n{execution_summary}"
-            response = gemini_model.generate_content(f"{reviewer_prompt}\n\n{context}", generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
-            review = parse_json_from_string(response.text)
-            
-            mission_log += f"Code Reviewer Verdict: {review.get('status').upper()}. Reason: {review.get('reason')}\n"
-            
-            if review.get("status") == "success":
-                break # Exit the retry loop and move to the next component
-            else:
-                last_error = review.get('reason') # Set the error for the next attempt
-        else: # This 'else' belongs to the 'for' loop, it runs if the loop completes without a 'break'
-            mission_log += f"[FATAL ERROR] Component '{component}' failed to build after all attempts. Aborting mission.\n"
-            yield mission_log, None
+            conversation.extend(tool_responses)
+            yield mission_log, os.listdir(PROJECT_DIR) or [], "", None
+
+        except Exception as e:
+            mission_log += f"Engine: [FATAL ERROR] An unexpected error occurred: {e}\nAborting mission."
+            yield mission_log, os.listdir(PROJECT_DIR) or [], "", None
             return
 
-    mission_log += "\n--- MISSION COMPLETE ---"
-    
-    # Final step: Create and provide download link
-    zip_path = os.path.join(PROJECT_DIR, "cosmic_forge_app.zip")
-    with zipfile.ZipFile(zip_path, 'w') as zf:
-        for root, _, files in os.walk(PROJECT_DIR):
-            for file in files:
-                if file != os.path.basename(zip_path):
-                    zf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), PROJECT_DIR))
-    
-    yield mission_log, gr.update(visible=True, value=zip_path)
+    mission_log += "\n--- Max steps reached. Mission concluding. ---"
+    yield mission_log, os.listdir(PROJECT_DIR) or [], "", None
 
 # --- GRADIO UI ---
-with gr.Blocks(theme=gr.themes.Monochrome(), title="Cosmic Forge") as demo:
-    gr.Markdown("# 🔥 Cosmic Forge: The Autonomous AI Developer")
-    status_bar = gr.Textbox("System Offline. Click 'Activate Engines' to begin.", label="System Status", interactive=False)
+with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="sky"), title="Genesis Framework") as demo:
+    gr.Markdown("# 🧬 Genesis: The Autonomous AI Developer")
+    status_bar = gr.Textbox("System Offline. Click 'Activate Engine' to begin.", label="System Status", interactive=False)
     
     with gr.Row():
-        with gr.Column(scale=2):
-            gr.Markdown("### 🚀 Mission Control")
-            mission_prompt = gr.Textbox(label="High-Level Objective", placeholder="e.g., A microservices-based URL shortener with a Redis backend and a React frontend.", lines=4)
-            launch_btn = gr.Button("Forge Application", variant="primary", interactive=False)
-            download_zip_btn = gr.DownloadButton(label="Download Forged App as .zip", visible=False)
+        with gr.Column(scale=1):
+            gr.Markdown("### ⚙️ Controls")
+            activate_btn = gr.Button("Activate Engine")
+            gr.Markdown("### 🌳 Project Files")
+            file_tree = gr.CheckboxGroup(label="File System", interactive=False)
+            download_zip_btn = gr.DownloadButton(label="Download Project as .zip", visible=False)
+        
         with gr.Column(scale=3):
-            gr.Markdown("### 📜 Mission Log")
-            mission_log_output = gr.Textbox(label="Live Log", lines=25, interactive=False, autoscroll=True)
+            gr.Markdown("### 📝 Mission Control")
+            mission_prompt = gr.Textbox(label="High-Level Objective", placeholder="Build a simple Flask app that returns the current time as a JSON object.")
+            launch_btn = gr.Button("🚀 Launch Mission", variant="primary", interactive=False)
+            gr.Markdown("### 📜 Mission Log & Live Terminal")
+            mission_log_output = gr.Textbox(label="Live Log", lines=20, interactive=False, autoscroll=True)
+            live_terminal = gr.Textbox(label="Live App Terminal", lines=5, interactive=False, autoscroll=True)
 
     def handle_activation():
         message, success = initialize_clients()
         return {status_bar: gr.update(value=message), launch_btn: gr.update(interactive=success)}
     
-    activate_btn = gr.Button("Activate Engines") # Moved button outside for better layout
-    status_bar.change(handle_activation, [], [status_bar, launch_btn]) # Auto-activate if secrets are present
-    demo.load(handle_activation, [], [status_bar, launch_btn]) # Activate on page load
-    
-    launch_btn.click(fn=run_cosmic_forge, inputs=[mission_prompt], outputs=[mission_log_output, download_zip_btn])
+    activate_btn.click(handle_activation, [], [status_bar, launch_btn])
+    launch_btn.click(fn=run_genesis_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, live_terminal, download_zip_btn])
 
 if __name__ == "__main__":
     demo.launch(debug=True)
