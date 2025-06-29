@@ -13,7 +13,7 @@ import zipfile
 from io import BytesIO
 
 # --- CONFIGURATION & STATE ---
-PROJECT_DIR = "genesis_project" # The final, final name
+PROJECT_DIR = "alpha_omega_project"
 openai_client, gemini_model = None, None
 app_process = None
 
@@ -52,16 +52,19 @@ def write_file(path: str, content: str, cwd: str = PROJECT_DIR) -> str:
     except Exception as e: return f"Error writing to file: {e}"
 
 def read_file(path: str, cwd: str = PROJECT_DIR) -> str:
+    # ... (same as before)
     full_path = os.path.join(cwd, path)
     try:
         with open(full_path, 'r', encoding='utf-8') as f: return f.read()
     except Exception as e: return f"Error reading file: {e}"
 
 def stream_process_output(process, queue):
+    # ... (same as before)
     for line in iter(process.stdout.readline, ''): queue.put(line)
     process.stdout.close()
 
 def run_background_app(command: str, cwd: str) -> str:
+    # ... (same as before)
     global app_process
     if app_process: app_process.kill()
     try:
@@ -71,6 +74,7 @@ def run_background_app(command: str, cwd: str) -> str:
 
 # --- INITIALIZATION & UTILITIES ---
 def initialize_clients():
+    # ... (same as before)
     global openai_client, gemini_model
     keys = {"OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"), "GOOGLE_API_KEY": os.getenv("GOOGLE_API_KEY"), "SERPER_API_KEY": os.getenv("SERPER_API_KEY")}
     missing_keys = [k for k, v in keys.items() if not v]
@@ -81,10 +85,11 @@ def initialize_clients():
         genai.configure(api_key=keys["GOOGLE_API_KEY"])
         gemini_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest")
         gemini_model.generate_content("ping")
-        return "✅ All engines online. The Genesis Framework is ready.", True
+        return "✅ All engines online. The Alpha & Omega Framework is ready.", True
     except Exception as e: return f"❌ API Initialization Failed: {e}", False
 
 def parse_json_from_string(text: str) -> dict or list:
+    # ... (same as before)
     match = re.search(r'```json\s*([\s\S]*?)\s*```|([\s\S]*)', text)
     if match:
         json_str = match.group(1) or match.group(2)
@@ -93,12 +98,8 @@ def parse_json_from_string(text: str) -> dict or list:
     raise ValueError("No JSON found.")
 
 def execute_tooling_task(instruction: str, cwd: str):
+    # ... (same as before)
     tooling_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest", tools=[oracle_search, execute_shell_command, write_file, read_file, run_background_app])
-    # To handle 'create directory' we will just map it to the mkdir shell command
-    if 'create a directory' in instruction.lower():
-        dir_name = instruction.split("named")[-1].strip().replace("`", "")
-        instruction = f"Run the command: mkdir {dir_name}"
-
     response = tooling_model.generate_content(instruction)
     if not response.candidates or not response.candidates[0].content.parts or not response.candidates[0].content.parts[0].function_call:
         return f"Tooling Specialist decided no tool was necessary.", cwd, True
@@ -116,20 +117,25 @@ def execute_tooling_task(instruction: str, cwd: str):
     if isinstance(result, tuple): return result[0], cwd, result[1]
     else: return result, cwd, success
 
-# --- THE GENESIS ORCHESTRATOR ---
-def run_genesis_mission(initial_prompt):
+# --- THE ALPHA & OMEGA ORCHESTRATOR ---
+def run_alpha_omega_mission(initial_prompt):
     mission_log = "Mission Log: [START]\n"
     yield mission_log, gr.update(choices=[]), "", gr.update(visible=False, value=None)
+    
     os.makedirs(PROJECT_DIR, exist_ok=True)
     
+    # Phase 1: Architect plans
     mission_log += "Architect (Gemini): Creating a high-level sequence of instructions...\n"
     yield mission_log, None, None, None
     
+    # ALPHA & OMEGA UPGRADE: The final, perfected prompt.
     architect_prompt = (
-        "You are The Architect. Create a logical, step-by-step plan to achieve the user's goal. "
+        "You are The Architect, an expert AI system designer. Create a logical, step-by-step plan to achieve the user's goal. "
         "The plan MUST be a valid JSON array of tasks. Each task object should have a single key: `instruction`. "
-        "Use natural language. For example: 'Create the directory my_app', then 'Create the file my_app/main.py with basic Flask code', "
-        "then 'Run the command: cd my_app', then 'Run the command: pip install -r requirements.txt'."
+        "Be explicit and tool-oriented in your instructions. "
+        "For example, instead of 'Create a directory', say 'Run the command: mkdir my_app'. "
+        "Instead of 'search for libraries', say 'Use oracle_search to find libraries for X'. "
+        "Instead of 'install dependencies', say 'Run the command: pip install -r requirements.txt'. "
         "Your entire response must be ONLY the raw JSON array."
     )
     gemini_json_config = genai.types.GenerationConfig(response_mime_type="application/json")
@@ -143,18 +149,23 @@ def run_genesis_mission(initial_prompt):
         yield mission_log, None, None, None
         return
 
+    # Phase 2: Execution Loop with perfected delegation
     current_files, current_working_directory = {}, PROJECT_DIR
-    tooling_keywords = ['mkdir', 'cd ', 'pip', 'python ', 'source', 'install', 'search', 'create a directory'] # <-- THE FINAL COMMANDMENT
+    
+    # ALPHA & OMEGA UPGRADE: A more robust keyword list.
+    tooling_keywords = r'\b(run the command|mkdir|cd|pip|python|source|install|search)\b'
+    
     for i, task in enumerate(task_list):
         task_num, instruction = i + 1, task['instruction']
         
-        if any(keyword in instruction.lower() for keyword in tooling_keywords):
+        # The Rule of Law: a regex search makes the keyword matching foolproof.
+        if re.search(tooling_keywords, instruction, re.IGNORECASE):
             chosen_agent = 'Tooling_Specialist'
         else:
             chosen_agent = 'Lead_Developer'
 
         mission_log += f"\n--- Executing Task {task_num}/{len(task_list)} ---\n"
-        mission_log += f"Engine (Genesis Protocol): Assigning `{chosen_agent}`. Instruction: `{instruction}`\n"
+        mission_log += f"Engine (Alpha & Omega Protocol): Assigning `{chosen_agent}`. Instruction: `{instruction}`\n"
         yield mission_log, gr.update(choices=list(current_files.keys())), "", None
         time.sleep(1)
         
@@ -184,6 +195,7 @@ def run_genesis_mission(initial_prompt):
             yield mission_log, gr.update(choices=list(current_files.keys())), "", None
             return
 
+    # Finalization
     mission_log += "\n--- Mission Complete ---"
     zip_path = os.path.join(PROJECT_DIR, "ai_generated_app.zip")
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -196,8 +208,9 @@ def run_genesis_mission(initial_prompt):
     yield mission_log, gr.update(choices=list(current_files.keys())), "", gr.update(visible=True, value=zip_path)
 
 # --- GRADIO UI ---
-with gr.Blocks(theme=gr.themes.Default(primary_hue="rose", secondary_hue="red"), title="Genesis Framework") as demo:
-    gr.Markdown("# 🏆 Genesis: The Autonomous AI Developer")
+with gr.Blocks(theme=gr.themes.Default(primary_hue="blue", secondary_hue="indigo"), title="Alpha & Omega Framework") as demo:
+    gr.Markdown("# 🌌 Alpha & Omega: The Autonomous AI Developer")
+    # ... UI is the same ...
     status_bar = gr.Textbox("System Offline. Click 'Activate Engines' to begin.", label="System Status", interactive=False)
     with gr.Row():
         with gr.Column(scale=1):
@@ -216,7 +229,7 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="rose", secondary_hue="red"),
         message, success = initialize_clients()
         return {status_bar: gr.update(value=message), launch_btn: gr.update(interactive=success)}
     activate_btn.click(handle_activation, [], [status_bar, launch_btn])
-    launch_btn.click(fn=run_genesis_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, gr.Textbox(visible=False), download_zip_btn])
+    launch_btn.click(fn=run_alpha_omega_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, gr.Textbox(visible=False), download_zip_btn])
 
 if __name__ == "__main__":
     demo.launch(debug=True)
