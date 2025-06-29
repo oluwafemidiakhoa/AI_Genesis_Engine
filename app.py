@@ -13,7 +13,7 @@ import zipfile
 from io import BytesIO
 
 # --- CONFIGURATION & STATE ---
-PROJECT_DIR = "cosmos_project" # The final name for the final version
+PROJECT_DIR = "genesis_project" # The final, final name
 openai_client, gemini_model = None, None
 app_process = None
 
@@ -81,7 +81,7 @@ def initialize_clients():
         genai.configure(api_key=keys["GOOGLE_API_KEY"])
         gemini_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest")
         gemini_model.generate_content("ping")
-        return "✅ All engines online. The Cosmos Framework is ready.", True
+        return "✅ All engines online. The Genesis Framework is ready.", True
     except Exception as e: return f"❌ API Initialization Failed: {e}", False
 
 def parse_json_from_string(text: str) -> dict or list:
@@ -94,6 +94,11 @@ def parse_json_from_string(text: str) -> dict or list:
 
 def execute_tooling_task(instruction: str, cwd: str):
     tooling_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest", tools=[oracle_search, execute_shell_command, write_file, read_file, run_background_app])
+    # To handle 'create directory' we will just map it to the mkdir shell command
+    if 'create a directory' in instruction.lower():
+        dir_name = instruction.split("named")[-1].strip().replace("`", "")
+        instruction = f"Run the command: mkdir {dir_name}"
+
     response = tooling_model.generate_content(instruction)
     if not response.candidates or not response.candidates[0].content.parts or not response.candidates[0].content.parts[0].function_call:
         return f"Tooling Specialist decided no tool was necessary.", cwd, True
@@ -111,23 +116,20 @@ def execute_tooling_task(instruction: str, cwd: str):
     if isinstance(result, tuple): return result[0], cwd, result[1]
     else: return result, cwd, success
 
-# --- THE COSMOS ORCHESTRATOR ---
-def run_cosmos_mission(initial_prompt):
+# --- THE GENESIS ORCHESTRATOR ---
+def run_genesis_mission(initial_prompt):
     mission_log = "Mission Log: [START]\n"
     yield mission_log, gr.update(choices=[]), "", gr.update(visible=False, value=None)
-    
     os.makedirs(PROJECT_DIR, exist_ok=True)
     
-    # Phase 1: Architect plans
     mission_log += "Architect (Gemini): Creating a high-level sequence of instructions...\n"
     yield mission_log, None, None, None
     
-    # COSMOS UPGRADE: The Architect is now only responsible for the *instructions*, not agent assignments.
     architect_prompt = (
         "You are The Architect. Create a logical, step-by-step plan to achieve the user's goal. "
         "The plan MUST be a valid JSON array of tasks. Each task object should have a single key: `instruction`. "
-        "Do not assign agents. Be specific with file paths and commands. "
-        "For example: 'Create the file my_app/main.py with basic Flask code', then 'Create the directory my_app/templates', then 'Run the command: cd my_app', then 'Run the command: pip install -r requirements.txt'."
+        "Use natural language. For example: 'Create the directory my_app', then 'Create the file my_app/main.py with basic Flask code', "
+        "then 'Run the command: cd my_app', then 'Run the command: pip install -r requirements.txt'."
         "Your entire response must be ONLY the raw JSON array."
     )
     gemini_json_config = genai.types.GenerationConfig(response_mime_type="application/json")
@@ -141,22 +143,18 @@ def run_cosmos_mission(initial_prompt):
         yield mission_log, None, None, None
         return
 
-    # Phase 2: Execution Loop with Deterministic Agent Delegation
-    current_files = {}
-    current_working_directory = PROJECT_DIR
-    tooling_keywords = ['mkdir', 'cd ', 'pip', 'python ', 'source', 'install', 'search']
+    current_files, current_working_directory = {}, PROJECT_DIR
+    tooling_keywords = ['mkdir', 'cd ', 'pip', 'python ', 'source', 'install', 'search', 'create a directory'] # <-- THE FINAL COMMANDMENT
     for i, task in enumerate(task_list):
         task_num, instruction = i + 1, task['instruction']
         
-        # --- COSMOS UPGRADE: THE RULE OF LAW ---
-        # The Orchestrator ignores any agent assignment and makes its own decision.
         if any(keyword in instruction.lower() for keyword in tooling_keywords):
             chosen_agent = 'Tooling_Specialist'
         else:
             chosen_agent = 'Lead_Developer'
 
         mission_log += f"\n--- Executing Task {task_num}/{len(task_list)} ---\n"
-        mission_log += f"Engine (Cosmos Protocol): Assigning `{chosen_agent}`. Instruction: `{instruction}`\n"
+        mission_log += f"Engine (Genesis Protocol): Assigning `{chosen_agent}`. Instruction: `{instruction}`\n"
         yield mission_log, gr.update(choices=list(current_files.keys())), "", None
         time.sleep(1)
         
@@ -186,7 +184,6 @@ def run_cosmos_mission(initial_prompt):
             yield mission_log, gr.update(choices=list(current_files.keys())), "", None
             return
 
-    # Finalization
     mission_log += "\n--- Mission Complete ---"
     zip_path = os.path.join(PROJECT_DIR, "ai_generated_app.zip")
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -199,9 +196,8 @@ def run_cosmos_mission(initial_prompt):
     yield mission_log, gr.update(choices=list(current_files.keys())), "", gr.update(visible=True, value=zip_path)
 
 # --- GRADIO UI ---
-with gr.Blocks(theme=gr.themes.Default(primary_hue="purple", secondary_hue="pink"), title="Cosmos Framework") as demo:
-    gr.Markdown("# 🪐 Cosmos: The Autonomous AI Development Framework")
-    # ... UI is the same ...
+with gr.Blocks(theme=gr.themes.Default(primary_hue="rose", secondary_hue="red"), title="Genesis Framework") as demo:
+    gr.Markdown("# 🏆 Genesis: The Autonomous AI Developer")
     status_bar = gr.Textbox("System Offline. Click 'Activate Engines' to begin.", label="System Status", interactive=False)
     with gr.Row():
         with gr.Column(scale=1):
@@ -220,7 +216,7 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="purple", secondary_hue="pink
         message, success = initialize_clients()
         return {status_bar: gr.update(value=message), launch_btn: gr.update(interactive=success)}
     activate_btn.click(handle_activation, [], [status_bar, launch_btn])
-    launch_btn.click(fn=run_cosmos_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, gr.Textbox(visible=False), download_zip_btn]) # Hide terminal output for this version
+    launch_btn.click(fn=run_genesis_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, gr.Textbox(visible=False), download_zip_btn])
 
 if __name__ == "__main__":
     demo.launch(debug=True)
