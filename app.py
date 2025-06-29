@@ -73,7 +73,6 @@ def get_model_response(model_name, messages, max_tokens=8192, temperature=0.3):
     raise ValueError("Model/client not ready.")
 
 def run_shell_command(command, cwd=PROJECT_DIR):
-    """Runs a shell command and captures its output."""
     try:
         print(f"Running command: `{command}` in `{cwd}`")
         result = subprocess.run(command, shell=True, cwd=cwd, capture_output=True, text=True, timeout=120)
@@ -96,7 +95,6 @@ def save_files_to_disk(files_dict):
             f.write(content)
 
 def generate_code_and_plan(description):
-    """The main initial generation function."""
     yield "Initializing...", {}, [], None, gr.update(interactive=False), gr.update(interactive=False)
     
     # Phase 1: Planning with Gemini
@@ -147,7 +145,6 @@ def generate_code_and_plan(description):
         output, success = run_shell_command("pip install -r requirements.txt")
         terminal_output += output
         if not success:
-            # Simple error handling for now. A full refinement loop would go here.
             yield "Installation failed. Check terminal output.", files, [], terminal_output, gr.update(interactive=True), gr.update(interactive=True)
             return
             
@@ -157,7 +154,7 @@ def generate_code_and_plan(description):
     if main_script:
         output, success = run_shell_command(f"python {main_script}", cwd=PROJECT_DIR)
         terminal_output += "\n" + output
-        if success or "Running on" in output: # Success if it runs without error code OR starts a server
+        if success or "Running on" in output:
              yield "✅ Build successful! App is ready. You can now chat to refine it or deploy it.", files, [], terminal_output, gr.update(interactive=True), gr.update(interactive=True, visible=True)
         else:
              yield "⚠️ Build complete, but initial run failed. The AI can now try to debug this. Chat with it!", files, [], terminal_output, gr.update(interactive=True), gr.update(interactive=True)
@@ -166,11 +163,8 @@ def generate_code_and_plan(description):
 
 
 def chat_and_refine(chat_history, files_dict, terminal_content):
-    """The main refinement loop."""
     user_query = chat_history[-1][0]
     yield chat_history, "⏳ Thinking...", gr.update(interactive=False)
-
-    # Build a comprehensive context for the AI
     context_prompt = (
         "You are an AI software engineer. You are in a refinement session. "
         "Below is the current state of the file system, the latest terminal output, and the user's request. "
@@ -181,134 +175,90 @@ def chat_and_refine(chat_history, files_dict, terminal_content):
     for filename, content in files_dict.items():
         context_prompt += f"**`{filename}`**\n```\n{content}\n```\n\n"
     context_prompt += f"--- LATEST TERMINAL OUTPUT ---\n```\n{terminal_content}\n```\n"
-
     messages = [{"role": "system", "content": context_prompt}, {"role": "user", "content": user_query}]
-    
     try:
-        ai_response = get_model_response("Gemini Pro", messages) # Gemini is better for multi-file reasoning
-
-        # Update files if AI provided new code
-        new_files_generated = False
+        ai_response = get_model_response("Gemini Pro", messages)
         if "--- FILE:" in ai_response:
-            new_files_generated = True
             for block in ai_response.split("--- FILE:"):
                 if block.strip():
                     parts = block.split('\n', 1)
                     filename = parts[0].strip()
                     content = parts[1] if len(parts) > 1 else ""
                     if filename in files_dict:
-                        files_dict[filename] = content # Update existing file
+                        files_dict[filename] = content
             save_files_to_disk(files_dict)
             response_to_user = "I have updated the files as you requested."
         else:
             response_to_user = ai_response
-            
         chat_history.append((None, response_to_user))
-        
-        # Optionally, re-run tests after changes
-        # (This can be added as another button or automatic step)
-
     except Exception as e:
         chat_history.append((None, f"Error during refinement: {e}"))
-        
     yield chat_history, "", gr.update(interactive=True)
 
 def deploy_with_ngrok():
-    """Finds a running Flask/FastAPI port and exposes it via ngrok."""
     global active_processes
-    
-    # First, ensure no old tunnels are running
-    for p in active_processes.values():
-        p.kill()
+    for p in active_processes.values(): p.kill()
     ngrok.kill()
-    
     yield "Deploying... Starting app and ngrok tunnel.", gr.update(interactive=False)
-
     main_script = os.path.join(PROJECT_DIR, next((f for f in os.listdir(PROJECT_DIR) if f.endswith('app.py') or f.endswith('main.py')), None))
     if not main_script:
         yield "Error: No 'app.py' or 'main.py' found to run.", gr.update(interactive=True)
         return
-
-    # Run the app in the background
     app_process = subprocess.Popen(f"python {os.path.basename(main_script)}", shell=True, cwd=PROJECT_DIR, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     active_processes['app'] = app_process
-    
-    time.sleep(5) # Give the server a moment to start
-
-    # Find the port from the app's output
-    port = None
-    output = ""
+    time.sleep(5)
+    port = 5000
     try:
-        output = app_process.stdout.read(1024) # Read some initial output
+        output = app_process.stdout.read(1024)
         for line in output.split('\n'):
             if "Running on http" in line:
                 port = int(line.split(':')[-1].split('/')[0])
                 break
-    except Exception:
-        pass # Ignore if no output yet
-        
-    if not port: port = 5000 # Default to Flask's default port
-
+    except Exception: pass
     try:
         public_url = ngrok.connect(port).public_url
-        message = f"✅ Deployed! Your app is live at: {public_url}"
-        yield message, gr.update(interactive=True)
+        yield f"✅ Deployed! Your app is live at: {public_url}", gr.update(interactive=True)
     except Exception as e:
         yield f"❌ Ngrok deployment failed: {e}", gr.update(interactive=True)
 
-
 # --- UI HELPER FUNCTIONS ---
 def update_file_tree_and_editor(files_dict):
-    """Refreshes the file tree and clears the editor."""
     return gr.update(choices=list(files_dict.keys())), gr.update(value="", language=None)
-
 def show_file_content(selected_file, files_dict):
-    """Displays file content when a file is selected from the tree."""
     content = files_dict.get(selected_file, "")
     lang = selected_file.split('.')[-1]
     if lang not in ['py', 'js', 'html', 'css', 'md', 'json', 'sql']: lang = 'text'
     return gr.update(value=content, language=lang)
 
-
 # --- GRADIO UI ---
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="emerald", secondary_hue="green"), title="AI Genesis Engine") as demo:
-    # App State
     files_state = gr.State({})
     chat_history_state = gr.State([])
-
     gr.Markdown("# 🧬 AI Genesis Engine")
     status_bar = gr.Textbox("Enter API keys to activate the engine.", interactive=False, container=False)
-
     with gr.Row():
-        # Left Pane: Controls & File Tree
         with gr.Column(scale=2):
             with gr.Accordion("🔑 API Credentials & Controls", open=True):
-                hf_token_input = gr.Password(label="Hugging Face Token")
-                google_key_input = gr.Password(label="Google AI Studio Key")
-                ngrok_token_input = gr.Password(label="Ngrok Authtoken (Optional)")
+                # *** FIX APPLIED HERE ***
+                hf_token_input = gr.Textbox(label="Hugging Face Token", type="password")
+                google_key_input = gr.Textbox(label="Google AI Studio Key", type="password")
+                ngrok_token_input = gr.Textbox(label="Ngrok Authtoken (Optional)", type="password")
                 validate_btn = gr.Button("Activate Engine")
-            
             with gr.Group(visible=False) as main_controls:
                 gr.Markdown("### 🌳 Project Files")
                 file_tree = gr.Radio(label="File System", interactive=True)
                 download_zip_btn = gr.DownloadButton(label="Download Project .zip", visible=False)
-
-        # Center Pane: Code Editor
         with gr.Column(scale=5):
              with gr.Group(visible=False) as workspace:
                 gr.Markdown("### 📝 Code Editor")
                 code_editor = gr.Code(label="Selected File Content", interactive=True, language=None)
-
-        # Right Pane: Chat, Terminal, Actions
         with gr.Column(scale=3):
             with gr.Group(visible=False) as action_panel:
                 gr.Markdown("### 💬 Chat & Actions")
                 chatbot = gr.Chatbot(label="Refinement Chat", height=400)
-                chat_input = gr.Textbox(label="Your Request", placeholder="e.g., Add a dark mode toggle to the CSS.")
-                
+                chat_input = gr.Textbox(label="Your Request", placeholder="e.g., A Python Flask API for a to-do list.")
                 gr.Markdown("### 🖥️ Live Terminal")
                 terminal = gr.Textbox(label="Terminal Output", interactive=False, lines=10)
-
                 with gr.Row():
                     generate_btn = gr.Button("▶️ Build New App", variant="primary")
                     deploy_btn = gr.Button("🚀 Deploy App", variant="secondary", visible=False)
@@ -324,29 +274,10 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="emerald", secondary_hue="green"
                 chat_input: gr.update(label="Initial App Description", placeholder="e.g., A Python Flask API for a to-do list...")
             }
         return {status_bar: gr.update(value=status)}
-    
     validate_btn.click(handle_validation, [hf_token_input, google_key_input, ngrok_token_input], [status_bar, main_controls, workspace, action_panel, validate_btn, chat_input])
-    
-    generate_btn.click(
-        fn=generate_code_and_plan,
-        inputs=[chat_input],
-        outputs=[status_bar, files_state, chat_history_state, terminal, generate_btn, deploy_btn]
-    ).then(
-        fn=update_file_tree_and_editor,
-        inputs=[files_state],
-        outputs=[file_tree, code_editor]
-    ).then(lambda: "Describe changes or ask questions.", outputs=[chat_input]) # Clear input
-
+    generate_btn.click(fn=generate_code_and_plan, inputs=[chat_input], outputs=[status_bar, files_state, chat_history_state, terminal, generate_btn, deploy_btn]).then(fn=update_file_tree_and_editor, inputs=[files_state], outputs=[file_tree, code_editor]).then(lambda: "Describe changes or ask questions.", outputs=[chat_input])
     file_tree.select(show_file_content, [file_tree, files_state], [code_editor])
-
-    chat_input.submit(
-        fn=lambda q, h: (h + [[q, None]], ""), inputs=[chat_input, chat_history_state], outputs=[chatbot, chat_input]
-    ).then(
-        fn=chat_and_refine, inputs=[chatbot, files_state, terminal], outputs=[chatbot, status_bar, generate_btn]
-    ).then(
-        fn=update_file_tree_and_editor, inputs=[files_state], outputs=[file_tree, code_editor]
-    )
-    
+    chat_input.submit(fn=lambda q, h: (h + [[q, None]], ""), inputs=[chat_input, chat_history_state], outputs=[chatbot, chat_input]).then(fn=chat_and_refine, inputs=[chatbot, files_state, terminal], outputs=[chatbot, status_bar, generate_btn]).then(fn=update_file_tree_and_editor, inputs=[files_state], outputs=[file_tree, code_editor])
     deploy_btn.click(deploy_with_ngrok, [], [status_bar, deploy_btn])
 
 if __name__ == "__main__":
