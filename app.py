@@ -5,13 +5,17 @@ import os
 import json
 import subprocess
 import time
+import re  # <--- THE MISSING IMPORT
+import threading
+from queue import Queue
+import zipfile
+from io import BytesIO
 
 # --- CONFIGURATION & STATE ---
 PROJECT_DIR = "helios_reborn_project"
 openai_client, gemini_model = None, None
 
 # --- TOOL DEFINITIONS ---
-# These are the actions the AI can take.
 def list_files(path: str = ".") -> str:
     """Lists all files and directories in a given path within the project."""
     full_path = os.path.join(PROJECT_DIR, path)
@@ -140,6 +144,8 @@ def run_helios_reborn_mission(initial_prompt):
         "For example: 1. Create the main application file `app.py`. 2. Add Flask boilerplate to `app.py`... etc."
     )
     response = gemini_model.generate_content(f"{architect_prompt}\n\nUser Goal: {initial_prompt}")
+    
+    # The line that was causing the error
     plan = [step.strip() for step in response.text.split('\n') if step.strip() and re.match(r'^\d+\.', step.strip())]
     
     if not plan:
