@@ -1,141 +1,353 @@
 import gradio as gr
-from huggingface_hub import InferenceClient
+from huggingface_hub import InferenceClient, HfApi
+from huggingface_hub.errors import HfHubHTTPError
+import google.generativeai as genai
+from pyngrok import ngrok, conf
 import os
 import zipfile
 from io import BytesIO
+import json
+import subprocess
+import time
+import threading
 
-# --- Authentication ---
-token = os.getenv("HUGGING_FACE_HUB_TOKEN") or os.getenv("HF_API_KEY")
-if not token:
-    raise ValueError("Hugging Face token not found. Set HUGGING_FACE_HUB_TOKEN or HF_API_KEY.")
+# --- CONSTANTS & CONFIGURATION ---
+CODE_LLAMA_MODEL = "codellama/CodeLlama-70b-Instruct-hf"
+GEMINI_MODEL = "gemini-1.5-pro-latest"
+PROJECT_DIR = "generated_project"
 
-# --- MODEL SELECTION ---
-# Switched to a top-tier, Hugging Face-hosted model that is fully compatible.
-# This model is excellent for coding and uses the conversational format.
-try:
-    client = InferenceClient("codellama/CodeLlama-70b-Instruct-hf", token=token)
-except Exception as e:
-    raise RuntimeError(f"Failed to initialize InferenceClient. Check model name and token. Error: {e}")
+# --- API & STATE MANAGEMENT ---
+hf_client, gemini_model = None, None
+active_processes = {} # To manage running app and ngrok processes
 
-# --- System Prompts ---
-CODE_ASSISTANT_PROMPTS = {
-    "Generate Code": "You are an expert programmer using the Code Llama model. Write clean, efficient, and well-documented code based on the user's request. Provide the code in a fenced code block.",
-    "Explain Code": "You are a senior software engineer and teacher. Explain the provided code snippet, breaking down its logic and purpose for a junior developer.",
-    "Debug Code": "You are a debugging expert. Analyze the code, identify any bugs or errors, explain the root cause, and provide the corrected code.",
-    "Refactor Code": "You are a code refactoring specialist. Improve the provided code for readability, efficiency, and maintainability without changing its behavior. Explain the improvements.",
-    "Write Unit Tests": "You are a quality assurance engineer. Write comprehensive unit tests for the given code using a common testing framework for the language.",
-}
-APP_BUILDER_PROMPTS = {
-    "Python Flask API": (
-        "You are a full-stack application architect. Your task is to generate a complete, multi-file Flask application based on the user's description. "
-        "Create all necessary files, including `app.py`, `requirements.txt`, and a `README.md`. "
-        "Strictly format your output by clearly separating each file's content with a header like `--- FILE: path/to/filename.ext ---`. "
-        "Do not include any other commentary outside of the file blocks."
-    ),
-    "React Frontend App": (
-        "You are a frontend development expert specializing in React. Generate a functional, multi-file React application using functional components and hooks based on the user's description. "
-        "Create all necessary files, like `src/App.js`, `src/index.css`, and `package.json`. "
-        "Strictly format your output by clearly separating each file's content with a header like `--- FILE: path/to/filename.ext ---`. "
-        "Do not include any other commentary outside of the file blocks."
-    ),
-     "Simple HTML/CSS/JS Website": (
-        "You are a web designer. Create the code for a simple static website based on the user's description. "
-        "Generate the `index.html`, `style.css`, and `script.js` files. "
-        "Strictly format your output by clearly separating each file's content with a header like `--- FILE: path/to/filename.ext ---`. "
-        "Do not include any other commentary outside of the file blocks."
+def initialize_clients(hf_token, google_key, ngrok_token):
+    global hf_client, gemini_model
+    status_messages = []
+    try:
+        # Hugging Face
+        print("Validating Hugging Face token...")
+        HfApi().whoami(token=hf_token)
+        hf_client = InferenceClient(CODE_LLAMA_MODEL, token=hf_token, timeout=180)
+        status_messages.append("✅ Hugging Face Client Initialized")
+        print("HF client OK.")
+    except Exception as e:
+        status_messages.append(f"❌ HF Error: {e}")
+
+    try:
+        # Gemini
+        print("Validating Google API key...")
+        genai.configure(api_key=google_key)
+        gemini_model = genai.GenerativeModel(GEMINI_MODEL)
+        gemini_model.generate_content("test", generation_config=genai.types.GenerationConfig(max_output_tokens=5))
+        status_messages.append("✅ Gemini Client Initialized")
+        print("Gemini client OK.")
+    except Exception as e:
+        status_messages.append(f"❌ Google/Gemini Error: {e}")
+
+    try:
+        # Ngrok
+        if ngrok_token:
+            print("Configuring ngrok...")
+            conf.get_default().auth_token = ngrok_token
+            status_messages.append("✅ Ngrok Configured")
+            print("Ngrok OK.")
+        else:
+            status_messages.append("⚠️ Ngrok token not provided. Deployment may be unstable.")
+    except Exception as e:
+        status_messages.append(f"❌ Ngrok Error: {e}")
+
+    success = "✅" in "".join(status_messages) and "Gemini" in "".join(status_messages)
+    return "\n".join(status_messages), success
+
+# --- CORE AI & SHELL LOGIC ---
+def get_model_response(model_name, messages, max_tokens=8192, temperature=0.3):
+    if model_name == "Code Llama" and hf_client:
+        response = hf_client.chat_completion(messages, max_tokens=max_tokens, temperature=max(0.1, temperature), seed=42)
+        return response.choices[0].message.content
+    elif model_name == "Gemini Pro" and gemini_model:
+        system_prompt = next((msg['content'] for msg in messages if msg['role'] == 'system'), "")
+        user_prompt = "\n---\n".join([msg['content'] for msg in messages if msg['role'] == 'user'])
+        full_prompt = f"{system_prompt}\n\n{user_prompt}"
+        response = gemini_model.generate_content(full_prompt, generation_config=genai.types.GenerationConfig(max_output_tokens=max_tokens, temperature=temperature))
+        return response.text
+    raise ValueError("Model/client not ready.")
+
+def run_shell_command(command, cwd=PROJECT_DIR):
+    """Runs a shell command and captures its output."""
+    try:
+        print(f"Running command: `{command}` in `{cwd}`")
+        result = subprocess.run(command, shell=True, cwd=cwd, capture_output=True, text=True, timeout=120)
+        output = f"$ {command}\n"
+        output += result.stdout
+        output += result.stderr
+        return output, result.returncode == 0
+    except subprocess.TimeoutExpired:
+        return f"$ {command}\nError: Command timed out after 120 seconds.", False
+    except Exception as e:
+        return f"$ {command}\nError: {e}", False
+
+def save_files_to_disk(files_dict):
+    if not os.path.exists(PROJECT_DIR):
+        os.makedirs(PROJECT_DIR)
+    for filename, content in files_dict.items():
+        path = os.path.join(PROJECT_DIR, filename)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+def generate_code_and_plan(description):
+    """The main initial generation function."""
+    yield "Initializing...", {}, [], None, gr.update(interactive=False), gr.update(interactive=False)
+    
+    # Phase 1: Planning with Gemini
+    yield "Phase 1/4: Generating architectural plan with Gemini Pro...", {}, [], None, None, None
+    plan_prompt = (
+        "You are an expert software architect. Create a detailed plan for a new application based on the user's description. "
+        "The plan must be a JSON object containing one key: `files`. The value of `files` should be an array of objects, "
+        "where each object has two keys: `path` (e.g., 'src/app.py') and `description` (a detailed explanation of the file's purpose, functions, and logic). "
+        "Do not output any text other than the raw JSON object."
     )
-}
-
-# --- Backend Functions ---
-def se_dev_assistant(user_input, file_obj, task, max_tokens, temperature, top_p):
-    if file_obj is not None:
-        file_content = file_obj.read().decode('utf-8')
-        user_input = f"Based on the following file content:\n\n```\n{file_content}\n```\n\nUser Request: {user_input}"
-    if not user_input.strip():
-        gr.Warning("Input is empty.")
-        return "", None
-    system_prompt = CODE_ASSISTANT_PROMPTS.get(task)
-    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_input}]
+    messages = [{"role": "system", "content": plan_prompt}, {"role": "user", "content": description}]
     try:
-        response = client.chat_completion(messages=messages, max_tokens=max_tokens, temperature=max(0.1, temperature), top_p=top_p)
-        result = response.choices[0].message.content
-        output_file = (BytesIO(result.encode('utf-8')), "ai_assistant_output.txt")
-        return result, output_file
+        plan_json_str = get_model_response("Gemini Pro", messages)
+        plan_data = json.loads(plan_json_str.strip().replace("```json", "").replace("```", ""))
+        files_to_create = plan_data['files']
     except Exception as e:
-        gr.Error(f"API Error: {e}")
-        return str(e), None
+        yield f"Error in planning phase: {e}", {}, [], None, gr.update(interactive=True), gr.update(interactive=True)
+        return
 
-def parse_and_create_zip(ai_output):
-    files = {}
-    current_filename = None
-    current_content = []
-    for line in ai_output.split('\n'):
-        if line.startswith("--- FILE:"):
-            if current_filename and current_content:
-                files[current_filename] = "\n".join(current_content).strip()
-            current_filename = line.split(":", 1)[1].strip()
-            current_content = []
-        elif current_filename is not None:
-            current_content.append(line)
-    if current_filename and current_content:
-         files[current_filename] = "\n".join(current_content).strip()
-    if not files: return None, ai_output
-    zip_buffer = BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for filename, content in files.items():
-            zf.writestr(filename, content)
-    zip_buffer.seek(0)
-    downloadable_zip = (zip_buffer, "generated_app.zip")
-    summary = "✅ App files generated successfully!\n\n" + "\n".join(files.keys())
-    return downloadable_zip, summary
-
-def build_app(app_description, app_type, max_tokens, temperature, top_p):
-    if not app_description.strip():
-        gr.Warning("Please describe the application you want to build.")
-        return None, "Error: App description cannot be empty."
-    system_prompt = APP_BUILDER_PROMPTS.get(app_type)
-    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": app_description}]
+    # Phase 2: Code Generation with Code Llama
+    yield "Phase 2/4: Generating code with Code Llama 70B...", {}, [], None, None, None
+    code_prompt = (
+        "You are Code Llama, an elite code generation AI. Based on the following JSON plan, generate the complete, functional code for all files. "
+        "Strictly format your output with a separator `--- FILE: path/to/filename.ext ---` followed by the raw code for that file. "
+        "Do not add any commentary or explanations outside the file blocks."
+    )
+    messages = [{"role": "system", "content": code_prompt}, {"role": "user", "content": json.dumps(files_to_create, indent=2)}]
     try:
-        response = client.chat_completion(messages=messages, max_tokens=max_tokens, temperature=max(0.1, temperature), top_p=top_p)
-        result = response.choices[0].message.content
-        return parse_and_create_zip(result)
+        generated_code = get_model_response("Code Llama", messages)
+        files = {}
+        for block in generated_code.split("--- FILE:"):
+            if block.strip():
+                parts = block.split('\n', 1)
+                filename = parts[0].strip()
+                content = parts[1] if len(parts) > 1 else ""
+                files[filename] = content
+        if not files: raise ValueError("Code generation produced no files.")
     except Exception as e:
-        gr.Error(f"API Error: {e}")
-        return None, str(e)
+        yield f"Error in code generation phase: {e}", {}, [], None, gr.update(interactive=True), gr.update(interactive=True)
+        return
 
-# --- Gradio UI ---
-with gr.Blocks(theme=gr.themes.Soft(), title="Dev Assistant Pro") as demo:
-    gr.Markdown("# 🚀 Dev Assistant Pro (Powered by Code Llama 70B)")
-    with gr.Tabs():
-        with gr.TabItem("Code Assistant"):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    task_selector = gr.Dropdown(label="Select Task", choices=list(CODE_ASSISTANT_PROMPTS.keys()), value="Generate Code")
-                    user_input_box = gr.Textbox(label="Prompt or Instructions", lines=10, placeholder="Enter your request...")
-                    file_uploader = gr.File(label="Upload File (Optional)", type="binary")
-                    with gr.Accordion("Advanced Settings", open=False):
-                        ca_max_tokens = gr.Slider(200, 4096, value=1500, label="Max Tokens")
-                        ca_temp = gr.Slider(0.1, 1.0, value=0.2, label="Temperature")
-                        ca_top_p = gr.Slider(0.1, 1.0, value=0.9, label="Top-p")
-                    ca_submit_btn = gr.Button("Generate", variant="primary")
-                with gr.Column(scale=2):
-                    ca_output_box = gr.Code(label="AI Response", language="markdown", lines=22)
-                    ca_download_btn = gr.DownloadButton(label="Download Response", visible=True)
-        with gr.TabItem("App Builder"):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    app_type_selector = gr.Dropdown(label="Select Application Type", choices=list(APP_BUILDER_PROMPTS.keys()), value="Python Flask API")
-                    app_desc_box = gr.Textbox(label="Describe Your Application", lines=15, placeholder="e.g., A simple to-do list API with endpoints to add, list, and delete tasks. Use an in-memory list to store tasks.")
-                    with gr.Accordion("Advanced Settings", open=False):
-                        ab_max_tokens = gr.Slider(500, 8192, value=4000, label="Max Tokens (use more for full apps)")
-                        ab_temp = gr.Slider(0.1, 1.0, value=0.2, label="Temperature")
-                        ab_top_p = gr.Slider(0.1, 1.0, value=0.9, label="Top-p")
-                    ab_submit_btn = gr.Button("Build App", variant="primary")
-                with gr.Column(scale=2):
-                    ab_output_summary = gr.Textbox(label="Generated App Summary", lines=10, interactive=False)
-                    ab_download_btn = gr.DownloadButton(label="Download App as .zip", visible=True)
-    ca_submit_btn.click(fn=se_dev_assistant, inputs=[user_input_box, file_uploader, task_selector, ca_max_tokens, ca_temp, ca_top_p], outputs=[ca_output_box, ca_download_btn])
-    ab_submit_btn.click(fn=build_app, inputs=[app_desc_box, app_type_selector, ab_max_tokens, ab_temp, ab_top_p], outputs=[ab_download_btn, ab_output_summary])
+    save_files_to_disk(files)
+    
+    # Phase 3: Install Dependencies
+    yield "Phase 3/4: Installing dependencies from requirements.txt...", files, [], None, None, None
+    terminal_output = ""
+    if 'requirements.txt' in files:
+        output, success = run_shell_command("pip install -r requirements.txt")
+        terminal_output += output
+        if not success:
+            # Simple error handling for now. A full refinement loop would go here.
+            yield "Installation failed. Check terminal output.", files, [], terminal_output, gr.update(interactive=True), gr.update(interactive=True)
+            return
+            
+    # Phase 4: Initial Run Test
+    yield "Phase 4/4: Performing initial run test...", files, [], terminal_output, None, None
+    main_script = next((f for f in files if f.endswith('app.py') or f.endswith('main.py')), None)
+    if main_script:
+        output, success = run_shell_command(f"python {main_script}", cwd=PROJECT_DIR)
+        terminal_output += "\n" + output
+        if success or "Running on" in output: # Success if it runs without error code OR starts a server
+             yield "✅ Build successful! App is ready. You can now chat to refine it or deploy it.", files, [], terminal_output, gr.update(interactive=True), gr.update(interactive=True, visible=True)
+        else:
+             yield "⚠️ Build complete, but initial run failed. The AI can now try to debug this. Chat with it!", files, [], terminal_output, gr.update(interactive=True), gr.update(interactive=True)
+    else:
+        yield "✅ Build successful (no runnable script found).", files, [], terminal_output, gr.update(interactive=True), gr.update(interactive=True)
+
+
+def chat_and_refine(chat_history, files_dict, terminal_content):
+    """The main refinement loop."""
+    user_query = chat_history[-1][0]
+    yield chat_history, "⏳ Thinking...", gr.update(interactive=False)
+
+    # Build a comprehensive context for the AI
+    context_prompt = (
+        "You are an AI software engineer. You are in a refinement session. "
+        "Below is the current state of the file system, the latest terminal output, and the user's request. "
+        "Your task is to respond to the user. If they ask for code changes, provide the full, updated code for ONLY the files that need to change, using the `--- FILE: path/to/file.ext ---` format. "
+        "If they ask a question, answer it directly.\n\n"
+        "--- CURRENT FILE SYSTEM ---\n"
+    )
+    for filename, content in files_dict.items():
+        context_prompt += f"**`{filename}`**\n```\n{content}\n```\n\n"
+    context_prompt += f"--- LATEST TERMINAL OUTPUT ---\n```\n{terminal_content}\n```\n"
+
+    messages = [{"role": "system", "content": context_prompt}, {"role": "user", "content": user_query}]
+    
+    try:
+        ai_response = get_model_response("Gemini Pro", messages) # Gemini is better for multi-file reasoning
+
+        # Update files if AI provided new code
+        new_files_generated = False
+        if "--- FILE:" in ai_response:
+            new_files_generated = True
+            for block in ai_response.split("--- FILE:"):
+                if block.strip():
+                    parts = block.split('\n', 1)
+                    filename = parts[0].strip()
+                    content = parts[1] if len(parts) > 1 else ""
+                    if filename in files_dict:
+                        files_dict[filename] = content # Update existing file
+            save_files_to_disk(files_dict)
+            response_to_user = "I have updated the files as you requested."
+        else:
+            response_to_user = ai_response
+            
+        chat_history.append((None, response_to_user))
+        
+        # Optionally, re-run tests after changes
+        # (This can be added as another button or automatic step)
+
+    except Exception as e:
+        chat_history.append((None, f"Error during refinement: {e}"))
+        
+    yield chat_history, "", gr.update(interactive=True)
+
+def deploy_with_ngrok():
+    """Finds a running Flask/FastAPI port and exposes it via ngrok."""
+    global active_processes
+    
+    # First, ensure no old tunnels are running
+    for p in active_processes.values():
+        p.kill()
+    ngrok.kill()
+    
+    yield "Deploying... Starting app and ngrok tunnel.", gr.update(interactive=False)
+
+    main_script = os.path.join(PROJECT_DIR, next((f for f in os.listdir(PROJECT_DIR) if f.endswith('app.py') or f.endswith('main.py')), None))
+    if not main_script:
+        yield "Error: No 'app.py' or 'main.py' found to run.", gr.update(interactive=True)
+        return
+
+    # Run the app in the background
+    app_process = subprocess.Popen(f"python {os.path.basename(main_script)}", shell=True, cwd=PROJECT_DIR, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    active_processes['app'] = app_process
+    
+    time.sleep(5) # Give the server a moment to start
+
+    # Find the port from the app's output
+    port = None
+    output = ""
+    try:
+        output = app_process.stdout.read(1024) # Read some initial output
+        for line in output.split('\n'):
+            if "Running on http" in line:
+                port = int(line.split(':')[-1].split('/')[0])
+                break
+    except Exception:
+        pass # Ignore if no output yet
+        
+    if not port: port = 5000 # Default to Flask's default port
+
+    try:
+        public_url = ngrok.connect(port).public_url
+        message = f"✅ Deployed! Your app is live at: {public_url}"
+        yield message, gr.update(interactive=True)
+    except Exception as e:
+        yield f"❌ Ngrok deployment failed: {e}", gr.update(interactive=True)
+
+
+# --- UI HELPER FUNCTIONS ---
+def update_file_tree_and_editor(files_dict):
+    """Refreshes the file tree and clears the editor."""
+    return gr.update(choices=list(files_dict.keys())), gr.update(value="", language=None)
+
+def show_file_content(selected_file, files_dict):
+    """Displays file content when a file is selected from the tree."""
+    content = files_dict.get(selected_file, "")
+    lang = selected_file.split('.')[-1]
+    if lang not in ['py', 'js', 'html', 'css', 'md', 'json', 'sql']: lang = 'text'
+    return gr.update(value=content, language=lang)
+
+
+# --- GRADIO UI ---
+with gr.Blocks(theme=gr.themes.Soft(primary_hue="emerald", secondary_hue="green"), title="AI Genesis Engine") as demo:
+    # App State
+    files_state = gr.State({})
+    chat_history_state = gr.State([])
+
+    gr.Markdown("# 🧬 AI Genesis Engine")
+    status_bar = gr.Textbox("Enter API keys to activate the engine.", interactive=False, container=False)
+
+    with gr.Row():
+        # Left Pane: Controls & File Tree
+        with gr.Column(scale=2):
+            with gr.Accordion("🔑 API Credentials & Controls", open=True):
+                hf_token_input = gr.Password(label="Hugging Face Token")
+                google_key_input = gr.Password(label="Google AI Studio Key")
+                ngrok_token_input = gr.Password(label="Ngrok Authtoken (Optional)")
+                validate_btn = gr.Button("Activate Engine")
+            
+            with gr.Group(visible=False) as main_controls:
+                gr.Markdown("### 🌳 Project Files")
+                file_tree = gr.Radio(label="File System", interactive=True)
+                download_zip_btn = gr.DownloadButton(label="Download Project .zip", visible=False)
+
+        # Center Pane: Code Editor
+        with gr.Column(scale=5):
+             with gr.Group(visible=False) as workspace:
+                gr.Markdown("### 📝 Code Editor")
+                code_editor = gr.Code(label="Selected File Content", interactive=True, language=None)
+
+        # Right Pane: Chat, Terminal, Actions
+        with gr.Column(scale=3):
+            with gr.Group(visible=False) as action_panel:
+                gr.Markdown("### 💬 Chat & Actions")
+                chatbot = gr.Chatbot(label="Refinement Chat", height=400)
+                chat_input = gr.Textbox(label="Your Request", placeholder="e.g., Add a dark mode toggle to the CSS.")
+                
+                gr.Markdown("### 🖥️ Live Terminal")
+                terminal = gr.Textbox(label="Terminal Output", interactive=False, lines=10)
+
+                with gr.Row():
+                    generate_btn = gr.Button("▶️ Build New App", variant="primary")
+                    deploy_btn = gr.Button("🚀 Deploy App", variant="secondary", visible=False)
+
+    # --- Event Wiring ---
+    def handle_validation(hf_key, google_key, ngrok_key):
+        status, success = initialize_clients(hf_key, google_key, ngrok_key)
+        if success:
+            return {
+                status_bar: gr.update(value=status), main_controls: gr.update(visible=True), 
+                workspace: gr.update(visible=True), action_panel: gr.update(visible=True),
+                validate_btn: gr.update(interactive=False),
+                chat_input: gr.update(label="Initial App Description", placeholder="e.g., A Python Flask API for a to-do list...")
+            }
+        return {status_bar: gr.update(value=status)}
+    
+    validate_btn.click(handle_validation, [hf_token_input, google_key_input, ngrok_token_input], [status_bar, main_controls, workspace, action_panel, validate_btn, chat_input])
+    
+    generate_btn.click(
+        fn=generate_code_and_plan,
+        inputs=[chat_input],
+        outputs=[status_bar, files_state, chat_history_state, terminal, generate_btn, deploy_btn]
+    ).then(
+        fn=update_file_tree_and_editor,
+        inputs=[files_state],
+        outputs=[file_tree, code_editor]
+    ).then(lambda: "Describe changes or ask questions.", outputs=[chat_input]) # Clear input
+
+    file_tree.select(show_file_content, [file_tree, files_state], [code_editor])
+
+    chat_input.submit(
+        fn=lambda q, h: (h + [[q, None]], ""), inputs=[chat_input, chat_history_state], outputs=[chatbot, chat_input]
+    ).then(
+        fn=chat_and_refine, inputs=[chatbot, files_state, terminal], outputs=[chatbot, status_bar, generate_btn]
+    ).then(
+        fn=update_file_tree_and_editor, inputs=[files_state], outputs=[file_tree, code_editor]
+    )
+    
+    deploy_btn.click(deploy_with_ngrok, [], [status_bar, deploy_btn])
 
 if __name__ == "__main__":
-    demo.launch(debug=True)
+    demo.launch(debug=True, share=False)
