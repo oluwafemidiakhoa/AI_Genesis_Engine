@@ -13,29 +13,29 @@ from queue import Queue
 import zipfile
 from io import BytesIO
 
-# --- CONFIGURATION & STATE ---
-PROJECT_DIR = "odyssey_project"
+# --- CONFIGURATION, TOOLS, INITIALIZATION, etc. (Mostly unchanged) ---
+PROJECT_DIR = "prometheus_project"
 openai_client, gemini_model = None, None
 app_process = None
 
-# --- TOOLS (No changes) ---
 def web_search(query: str) -> str:
-    try:
-        response = requests.get(f"https://html.duckduckgo.com/html/?q={query}", headers={"User-Agent": "Mozilla/5.0"})
-        soup = BeautifulSoup(response.text, 'html.parser')
-        snippets = [p.get_text() for p in soup.find_all('a', class_='result__a')]
-        return "Search Results:\n" + "\n".join(f"- {s}" for s in snippets[:5]) if snippets else "No results found."
-    except Exception as e: return f"Error during web search: {e}"
-def execute_shell_command(command: str, cwd: str = PROJECT_DIR) -> str:
-    try:
-        if "cd " in command:
-            new_dir = command.split("cd ")[1].strip()
-            target_path = os.path.join(cwd, new_dir)
-            if os.path.isdir(target_path): return f"Successfully changed directory to {target_path}"
-            else: return f"Error: Directory '{target_path}' not found."
-        result = subprocess.run(command, shell=True, cwd=cwd, capture_output=True, text=True, timeout=120)
-        return f"$ {command}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-    except Exception as e: return f"Error executing shell command: {e}"
+    # PROMETHEUS UPGRADE: Add retries
+    for attempt in range(2):
+        try:
+            print(f"Tooling Specialist: Performing web search for '{query}' (Attempt {attempt+1})...")
+            response = requests.get(f"https://html.duckduckgo.com/html/?q={query}", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            snippets = [p.get_text() for p in soup.find_all('a', class_='result__a')]
+            return "Search Results:\n" + "\n".join(f"- {s}" for s in snippets[:5]) if snippets else "No results found."
+        except requests.exceptions.Timeout:
+            print("Web search timed out, retrying...")
+            time.sleep(1)
+        except Exception as e:
+            return f"Error during web search: {e}"
+    return "Error: Web search failed after multiple retries."
+
+# Other tools (write_file, read_file) are the same
 def write_file(path: str, content: str) -> str:
     full_path = os.path.join(PROJECT_DIR, path)
     try:
@@ -58,8 +58,6 @@ def run_background_app(command: str, cwd: str) -> str:
         app_process = subprocess.Popen(command, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         return f"Successfully started background process for '{command}'."
     except Exception as e: return f"Error starting background process: {e}"
-
-# --- INITIALIZATION & UTILITIES (No changes) ---
 def initialize_clients():
     global openai_client, gemini_model
     openai_key = os.getenv("OPENAI_API_KEY")
@@ -71,7 +69,7 @@ def initialize_clients():
         genai.configure(api_key=google_key)
         gemini_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest")
         gemini_model.generate_content("ping")
-        return "✅ All engines online. Helios awaits.", True
+        return "✅ All engines online. Prometheus awaits.", True
     except Exception as e: return f"❌ API Initialization Failed: {e}", False
 def parse_json_from_string(text: str) -> dict or list:
     match = re.search(r'```json\s*([\s\S]*?)\s*```|([\s\S]*)', text)
@@ -80,6 +78,40 @@ def parse_json_from_string(text: str) -> dict or list:
         try: return json.loads(json_str.strip())
         except json.JSONDecodeError as e: raise ValueError(f"Failed to decode JSON. Error: {e}. Text: '{json_str[:200]}...'")
     raise ValueError("No JSON found.")
+
+# --- PROMETHEUS UPGRADE: The Intelligent Dependency Checker ---
+def execute_shell_command(command: str, cwd: str = PROJECT_DIR) -> str:
+    # If it's a pip install command, use the dry-run check first
+    if command.startswith("pip install"):
+        dry_run_command = command.replace("pip install", "pip install --dry-run")
+        print(f"Dependency Agent: Performing dry run: `{dry_run_command}`")
+        dry_run_result = subprocess.run(dry_run_command, shell=True, cwd=cwd, capture_output=True, text=True)
+        dry_run_output = dry_run_result.stdout + dry_run_result.stderr
+
+        # Ask the DependencyConflictAgent to analyze the dry run
+        conflict_agent_prompt = (
+            "You are a Python dependency expert. Analyze the following `pip install --dry-run` output. "
+            "Your ONLY job is to determine if installing these packages would cause a dependency conflict with essential libraries like 'gradio'. "
+            "Respond with a single JSON object: `{\"conflict\": true/false, \"reason\": \"A brief explanation of the conflict, or 'None' if no conflict exists.\"}`."
+        )
+        gemini_json_config = genai.types.GenerationConfig(response_mime_type="application/json")
+        response = gemini_model.generate_content(f"{conflict_agent_prompt}\n\nDry Run Output:\n{dry_run_output}", generation_config=gemini_json_config)
+        analysis = parse_json_from_string(response.text)
+
+        if analysis.get("conflict"):
+            reason = analysis.get("reason")
+            error_message = f"Dependency Conflict Detected by Agent! Reason: {reason}. Aborting installation to prevent system failure."
+            print(error_message)
+            return error_message
+
+    # If no conflict, proceed with the actual command
+    try:
+        print(f"Tooling Specialist: Executing shell command `{command}` in `{cwd}`...")
+        result = subprocess.run(command, shell=True, cwd=cwd, capture_output=True, text=True, timeout=120)
+        return f"$ {command}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    except Exception as e:
+        return f"Error executing shell command: {e}"
+
 def execute_tooling_task(instruction: str, cwd: str):
     tooling_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest", tools=[web_search, execute_shell_command, write_file, read_file, run_background_app])
     response = tooling_model.generate_content(instruction)
@@ -89,21 +121,29 @@ def execute_tooling_task(instruction: str, cwd: str):
     tool_name = function_call.name
     tool_args = dict(function_call.args)
     if tool_name in ["execute_shell_command", "run_background_app"]: tool_args["cwd"] = cwd
+    
+    # Handle cd separately to manage state
+    if tool_name == "execute_shell_command" and "cd " in tool_args.get("command", ""):
+        new_dir = tool_args["command"].split("cd ")[1].strip()
+        new_cwd = os.path.normpath(os.path.join(cwd, new_dir))
+        if os.path.isdir(new_cwd):
+            return f"Successfully changed directory to {new_cwd}", new_cwd
+        else:
+            return f"Error: Directory '{new_cwd}' not found.", cwd
+
     result = globals()[tool_name](**tool_args)
     return result, cwd
 
-# --- ODYSSEY ORCHESTRATOR (UPGRADED WITH HYPERION DOWNLOAD LOGIC) ---
+# --- ODYSSEY ORCHESTRATOR & UI (No other changes needed) ---
 def run_odyssey(initial_prompt):
-    # This is a generator function, so we yield updates
+    # This entire orchestrator function can remain the same.
+    # The new intelligent logic is self-contained within execute_shell_command.
     mission_log = "Mission Log: [START]\n"
     yield mission_log, gr.update(choices=[]), "", gr.update(visible=False, value=None)
     os.makedirs(PROJECT_DIR, exist_ok=True)
     current_working_directory = PROJECT_DIR
-    
-    # Phase 1: Architect
     mission_log += "Architect (Gemini): Creating a logical, efficient project plan...\n"
     yield mission_log, None, None, None
-    architect_prompt = "..." # (Same as before)
     architect_prompt = (
         "You are The Architect, an expert AI system designer. Create a logical, step-by-step plan for the user's goal. "
         "The plan MUST be a valid JSON array of tasks. Each task is an object with `agent` and `instruction` keys. "
@@ -122,11 +162,8 @@ def run_odyssey(initial_prompt):
         mission_log += f"Architect: [FATAL ERROR] Failed to create a valid plan. Reason: {e}\n"
         yield mission_log, None, None, None
         return
-
-    # Phase 2: Execution Loop
     current_files = {}
     for i, task in enumerate(task_list):
-        # ... (Execution logic is the same as the previous version) ...
         task_num = i + 1
         instruction = task['instruction']
         chosen_agent = task['agent']
@@ -153,7 +190,7 @@ def run_odyssey(initial_prompt):
             elif chosen_agent == 'Tooling_Specialist':
                 result, current_working_directory = execute_tooling_task(instruction, current_working_directory)
                 mission_log += f"Tooling Specialist Result:\n---\n{result}\n---\n"
-            if "Error:" in str(result) or "ERROR:" in str(result):
+            if "Error:" in str(result) or "ERROR:" in str(result) or "Conflict Detected" in str(result):
                 mission_log += f"Engine: [TASK FAILED] An error occurred. Aborting mission.\n"
                 yield mission_log, gr.update(choices=list(current_files.keys())), "", None
                 return
@@ -162,19 +199,12 @@ def run_odyssey(initial_prompt):
             mission_log += f"Engine: [FATAL ERROR] Task failed. Reason: {e}\nAborting mission.\n"
             yield mission_log, gr.update(choices=list(current_files.keys())), "", None
             return
-
-    # Phase 3: Post-Mission
     mission_log += "\n--- Mission Complete ---"
-    
-    # HYPERION UPGRADE: Prepare the download file
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for filename, content in current_files.items():
-            zf.writestr(filename, content)
+        for filename, content in current_files.items(): zf.writestr(filename, content)
     zip_buffer.seek(0)
-    # The downloadable file object for Gradio is a tuple: (BytesIO_object, filename)
     downloadable_zip = (zip_buffer, "ai_generated_app.zip")
-    
     terminal_text = ""
     if app_process:
         mission_log += "\n--- Application is Running ---"
@@ -182,19 +212,15 @@ def run_odyssey(initial_prompt):
         thread = threading.Thread(target=stream_process_output, args=(app_process, output_queue))
         thread.daemon = True
         thread.start()
-        
         while thread.is_alive() or not output_queue.empty():
             while not output_queue.empty():
                 terminal_text += output_queue.get()
                 yield mission_log, gr.update(choices=list(current_files.keys())), terminal_text, gr.update(visible=True, value=downloadable_zip)
             time.sleep(0.5)
-            
     yield mission_log, gr.update(choices=list(current_files.keys())), terminal_text, gr.update(visible=True, value=downloadable_zip)
 
-
-# --- GRADIO UI (UPGRADED WITH HYPERION DOWNLOAD BUTTON) ---
-with gr.Blocks(theme=gr.themes.Default(primary_hue="blue", secondary_hue="sky"), title="Helios Framework") as demo:
-    gr.Markdown("# ☀️ Helios: The Autonomous AI Development Environment")
+with gr.Blocks(theme=gr.themes.Default(primary_hue="blue", secondary_hue="sky"), title="Prometheus Framework") as demo:
+    gr.Markdown("# 🔥 Prometheus: The AI Developer with Environmental Awareness")
     status_bar = gr.Textbox("System Offline. Click 'Activate Engines' to begin.", label="System Status", interactive=False)
     with gr.Row():
         with gr.Column(scale=1):
@@ -202,7 +228,6 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="blue", secondary_hue="sky"),
             activate_btn = gr.Button("Activate Engines")
             gr.Markdown("### 🌳 Project Files")
             file_tree = gr.Radio(label="File System", interactive=True)
-            # HYPERION UPGRADE: Added the download button
             download_zip_btn = gr.DownloadButton(label="Download Project as .zip", visible=False)
         with gr.Column(scale=3):
             gr.Markdown("### 📝 Mission Control")
@@ -211,18 +236,11 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="blue", secondary_hue="sky"),
             gr.Markdown("### 📜 Mission Log & Live Terminal")
             mission_log_output = gr.Textbox(label="Mission Log", lines=15, interactive=False, autoscroll=True)
             terminal_output = gr.Textbox(label="Live App Terminal", lines=10, interactive=False, autoscroll=True)
-
     def handle_activation():
         message, success = initialize_clients()
         return {status_bar: gr.update(value=message), launch_btn: gr.update(interactive=success)}
-    
     activate_btn.click(handle_activation, [], [status_bar, launch_btn])
-    launch_btn.click(
-        fn=run_odyssey, 
-        inputs=[mission_prompt], 
-        # HYPERION UPGRADE: Added download button to outputs
-        outputs=[mission_log_output, file_tree, terminal_output, download_zip_btn]
-    )
+    launch_btn.click(fn=run_odyssey, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, terminal_output, download_zip_btn])
 
 if __name__ == "__main__":
     demo.launch(debug=True)
