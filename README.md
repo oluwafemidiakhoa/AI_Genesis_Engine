@@ -1,11 +1,10 @@
 ---
-title: AI Genesis Engine
+title: The Foundry (AI Venture Studio)
 emoji: 🚀
-colorFrom: blue
+colorFrom: green
 colorTo: indigo
-sdk: gradio
+sdk: docker
 sdk_version: 5.35.0
-app_file: run.py
 short_description: Enhanced Chatbot for Software Engineering
 ---
 
