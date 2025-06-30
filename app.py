@@ -18,7 +18,8 @@ app_process = None
 # --- TOOLSET ---
 def list_files(path: str = ".") -> str:
     full_path = os.path.join(PROJECT_DIR, path)
-    if not os.path.isdir(full_path): return f"Error: Directory '{path}' does not exist."
+    if not os.path.isdir(full_path):
+        return f"Error: Directory '{path}' does not exist."
     try:
         files = os.listdir(full_path)
         return "\n".join(files) if files else "(empty directory)"
@@ -72,15 +73,13 @@ def run_final_mission(initial_prompt, max_steps=25):
     global app_process
     
     mission_log = "[MISSION LOG: START]\n"
-    # Yield initial empty state for all components
     yield mission_log, [], "", gr.update(visible=False, value=None)
 
     if os.path.exists(PROJECT_DIR): shutil.rmtree(PROJECT_DIR)
     os.makedirs(PROJECT_DIR, exist_ok=True)
     
-    # FINAL FIX: The state trackers
     current_working_directory = PROJECT_DIR
-    project_files = {} # This will be our source of truth
+    project_files = {}
 
     conversation = [
         {"role": "system", "content": "You are an autonomous AI developer. Your goal is to achieve the user's objective by calling a sequence of functions. Think step-by-step. Use `change_directory` to navigate. Use `launch_server` for long-running processes. When the objective is complete, call `finish_mission`."},
@@ -112,7 +111,6 @@ def run_final_mission(initial_prompt, max_steps=25):
                 function_name, function_args = tool_call.function.name, json.loads(tool_call.function.arguments)
                 mission_log += f"Action: Calling `{function_name}` with args: {function_args}\n"
                 
-                # Pass CWD to tools that need it, and update it if changed
                 if function_name in ["run_shell_command", "launch_server"]:
                     function_args["cwd"] = current_working_directory
                 
@@ -126,7 +124,6 @@ def run_final_mission(initial_prompt, max_steps=25):
                     else:
                         result = f"Error: Directory '{function_args['path']}' does not exist."
                 
-                # FINAL FIX: Update our file state dictionary when a file is written
                 if function_name == "write_file" and "Error" not in result:
                     project_files[function_args["path"]] = function_args["content"]
 
@@ -135,17 +132,14 @@ def run_final_mission(initial_prompt, max_steps=25):
                 if function_name == "finish_mission":
                     mission_log += "--- MISSION COMPLETE ---"
                     
-                    # FINAL FIX: Create the zip from our state dictionary
-                    zip_buffer = BytesIO()
-                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    # THE FINAL FIX: Save the zip to a temporary file on disk
+                    temp_dir = "/tmp/gradio"
+                    os.makedirs(temp_dir, exist_ok=True)
+                    zip_path = os.path.join(temp_dir, "ai_generated_app.zip")
+
+                    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                         for path, content in project_files.items():
                             zf.writestr(path, content)
-                    zip_buffer.seek(0)
-
-                    # Gradio's DownloadButton needs the raw bytes and a filename.
-                    # We pass this as a tuple. Unfortunately, Gradio's type hinting doesn't
-                    # show this well, but it's the correct way.
-                    download_payload = (zip_buffer, "ai_generated_app.zip")
                     
                     terminal_text = ""
                     if app_process:
@@ -155,7 +149,8 @@ def run_final_mission(initial_prompt, max_steps=25):
                         time.sleep(2)
                         while not output_queue.empty(): terminal_text += output_queue.get()
                     
-                    yield mission_log, list(project_files.keys()), terminal_text, gr.update(visible=True, value=download_payload)
+                    # Yield the string path to the file
+                    yield mission_log, list(project_files.keys()), terminal_text, gr.update(visible=True, value=zip_path)
                     return
 
                 tool_responses.append({"tool_call_id": tool_call.id, "role": "tool", "name": function_name, "content": result})
