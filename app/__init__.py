@@ -20,6 +20,14 @@ def create_app(config_name='dev'):
     
     db.init_app(app)
 
+    # --- THE FINAL FIX ---
+    # Create the database tables if they don't exist.
+    # We do this within the app context to ensure everything is set up correctly.
+    with app.app_context():
+        from . import models  # Import models here to avoid circular imports
+        db.create_all()
+    # --- END OF FIX ---
+
     # Import and register blueprints here
     from .main import main as main_blueprint
     app.register_blueprint(main_blueprint)
