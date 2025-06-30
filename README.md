@@ -2,7 +2,7 @@
 title: AI Genesis Engine
 emoji: 🚀
 colorFrom: blue
-colorTo: green
+colorTo: indigo
 sdk: gradio
 sdk_version: 5.35.0
 app_file: run.py
