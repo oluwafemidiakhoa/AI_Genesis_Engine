@@ -14,94 +14,69 @@ Check out the configuration reference at https://huggingface.co/docs/hub/spaces-
 
 
 
-
-🧬 AI Genesis Engine
-An Interactive AI Development Environment that Builds, Tests, Deploys, and Refines Software in a Continuous Loop.
-![alt text](https://img.shields.io/badge/build-passing-green)
+🧬 Genesis Prime: The Autonomous AI Developer
+![alt text](https://img.shields.io/badge/build-stable-green)
 ![alt text](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![alt text](https://img.shields.io/badge/python-3.9+-blue.svg)
-The AI Genesis Engine is not just a code generator; it's a self-contained, interactive development environment powered by a multi-agent AI system. It orchestrates a sophisticated workflow that mirrors professional software development, enabling a user to take an idea from a single sentence to a live, deployed web application.
-The core philosophy is the "Build, Test, Debug, Refine" loop, where the AI can execute its own code, analyze the output and errors, and iteratively self-correct until the application is functional.
-(A conceptual screenshot of the IDE-like layout)
-✨ Core Features
-🧠 Dual-Model AI Core: Leverages the distinct strengths of the world's leading models:
-Google Gemini 1.5 Pro: For high-level reasoning, architectural planning, and multi-file logic structuring.
-Meta Code Llama 70B: For expert-level, syntactically precise code generation.
-🔁 Self-Correcting Loop: The engine executes the generated code, captures terminal output (including errors), and feeds it back to the AI. The AI can then debug its own SyntaxError, ModuleNotFoundError, or runtime bugs.
-🖥️ Integrated Development Environment (IDE) in your Browser:
-Live File Tree: See your entire application's file structure dynamically update as the AI works.
-Code Editor: View and edit any generated file with full syntax highlighting.
-Live Terminal: Watch in real-time as the AI installs dependencies (pip install) and runs your application.
-🚀 One-Click Deployment: Once your application is running successfully, a single click uses ngrok to instantly create a secure, public URL, making your app live on the internet for testing and sharing.
-💬 Conversational Refinement: After the initial build, engage in a continuous dialogue with the AI. Ask for new features, UI changes, or bug fixes. The AI maintains full context of the codebase and conversation history.
-Workflow: Idea to Live App in 4 Steps
-The entire user experience is designed to be a seamless progression from concept to reality.
-1. Activation & Setup
-Provide your API keys for Hugging Face, Google AI, and (optionally) Ngrok. The engine validates them and unlocks the main workspace.
-2. The Initial Build
-Describe your application in plain English (e.g., "A Flask API for a blog"). Click "Build New App" and watch as the engine executes a 4-phase build process:
-Phase 1: Planning (Gemini): The AI creates a detailed JSON architectural plan.
-Phase 2: Generation (Code Llama): The AI writes all the code based on the approved plan.
-Phase 3: Dependency Installation: The AI runs pip install -r requirements.txt in the live terminal.
-Phase 4: Test Run: The AI attempts to run the main application script to check for immediate errors.
-3. Interactive Refinement
-With the first version built, the refinement loop begins.
-Analyze: Review the code in the editor and the output in the terminal.
-Instruct: Use the chat to tell the AI what to do next. Examples:
-"The app crashed with a KeyError. Please analyze the terminal output and fix the bug."
-"Add a new database model for 'Comments' and an endpoint to post them."
-Iterate: The AI will modify the files, and you can immediately see the changes and re-test.
-4. Live Deployment
-Once you're satisfied, click the "Deploy App" button. The engine starts the application server and tunnels it through ngrok, providing you with a public URL.
+Genesis Prime is not just another code generator. It is a fully autonomous, end-to-end software development framework powered by a single, hyper-competent AI agent.
+This project was forged in the crucible of failure. Through a long and challenging iterative process, we moved beyond brittle, multi-agent systems and complex, flawed orchestrators. The result is Genesis Prime: a system built on a simple, elegant, and profoundly powerful principle—that a single AI mind, given the right tools and a clear objective, can reason, plan, and execute the creation of complete software applications from scratch.
+It takes a single high-level prompt, thinks step-by-step, writes code, installs its own dependencies, launches the server, and provides the final, working application for download.
+The Genesis Philosophy: One Mind, Many Hands
+The failure of previous versions taught us a critical lesson: trying to force an AI into a human-like "team" structure creates more problems than it solves. The breakthrough of Genesis Prime is its unified architecture:
+A Single, Omnipotent Mind (GPT-4o): We entrust the entire mission to the world's most advanced reasoning and tool-using model. There is no separate "Architect" or "Developer." There is only the Genesis Agent, which holistically understands the goal from start to finish.
+The Action-Reaction Loop: The agent operates in a simple, powerful loop. It observes the state of the project, decides on the next best action (or multiple actions in parallel), executes them using its tools, and then analyzes the results to inform its next decision.
+Stateful World Awareness: The AI is not blind. At every step, it is aware of the files it has created, allowing it to reason about its environment and avoid the logical errors that plagued earlier versions.
+End-to-End Execution: The framework handles the entire lifecycle: from creating the first file to running pip install to launching the final Flask server in the background and providing a live terminal view.
+(A demonstration of the Genesis Prime framework taking a high-level prompt, building the file system, installing dependencies, and launching the live server.)
 🛠️ Tech Stack
 Backend: Python 3.9+
 UI Framework: Gradio
-AI Models: Google Gemini 1.5 Pro, Meta Code Llama 70B
-API Clients: huggingface_hub, google-generativeai
-Deployment: pyngrok
-Execution: Python subprocess
+AI Engine: OpenAI GPT-4o
+Core Tools: subprocess, shutil, zipfile
 🚀 Getting Started
-Follow these steps to get the AI Genesis Engine running on your local machine.
+Follow these steps to get the Genesis Prime framework running on your local machine or in a cloud environment like Hugging Face Spaces.
 Prerequisites
 Python 3.9 or higher
-Git
+An OpenAI API Key
 Installation
-Clone the repository:
-Generated bash
-git clone https://github.com/your-username/ai-genesis-engine.git
-cd ai-genesis-engine
-Use code with caution.
-Bash
+Clone the repository (if applicable) or save the code:
+Save the final, working code as app.py.
 Install the required Python packages:
 Generated bash
-pip install -r requirements.txt
-# Or, if you don't have a requirements.txt file yet:
-pip install gradio huggingface_hub google-generativeai pyngrok
+pip install gradio openai
 Use code with caution.
 Bash
-API Keys
-To use the engine, you need to acquire three API keys:
-Hugging Face: A User Access Token with write permissions. Get it from hf.co/settings/tokens.
-Google AI Studio (Gemini): An API Key. Get it from aistudio.google.com/app/apikey.
-Ngrok (Recommended): An authtoken for stable deployment tunnels. Get it from the ngrok Dashboard.
-How to Run
-Execute the main script from your terminal:
+Set Up Your API Key (Crucial Step)
+This application is designed to be run in a secure environment where API keys are stored as secrets.
+For Hugging Face Spaces:
+Go to your Space's Settings tab.
+Scroll down to Repository secrets.
+Click "New secret".
+Name: OPENAI_API_KEY
+Value: Paste your OpenAI key (it starts with sk-...).
+Click "Add secret" and restart the Space.
+For Local Development:
+Set an environment variable in your terminal before running the app:
 Generated bash
-python genesis_engine.py
+export OPENAI_API_KEY="sk-..."
 Use code with caution.
 Bash
-Open the application:
-The terminal will provide a local URL (e.g., http://127.0.0.1:7860). Open this link in your web browser.
-Activate the Engine:
-Enter your three API keys in the sidebar and click "Activate Engine". The workspace will unlock upon successful validation. You are now ready to build.
-🗺️ Roadmap & Future Vision
-The AI Genesis Engine is a foundation. Future development could include:
-Fully Automated Debugging Loop: The AI automatically re-runs tests after a fix without user prompting.
-Test-Driven Development (TDD): Instruct the AI to write pytest files first, then write the application code to make the tests pass.
-Frontend-Backend Symbiosis: A more sophisticated planner that can generate a React/Vue frontend that correctly communicates with a generated Python/Node.js backend.
-Dockerization: An action to automatically generate a Dockerfile and docker-compose.yml for the project.
-Persistent State: Save and load entire project states, allowing you to stop and resume complex development sessions.
-🤝 Contributing
-Contributions are welcome! If you have ideas for new features, bug fixes, or improvements, please open an issue to discuss it first.
+💡 How to Use
+The framework is designed for simplicity and power.
+Activate the Engine: Once the application loads, click the "Activate Engine" button. The system will verify your API key and prepare itself. The status bar will confirm when it's ready.
+Provide Your Vision: In the "High-Level Objective" text box, describe the application you want to build. Be ambitious!
+Launch the Mission: Click the "🚀 Launch Mission" button.
+Observe: Watch the Mission Log as the AI thinks, acts, and builds your application in real-time. The Project Files view will update as the AI creates files and directories.
+Test & Download: Once the mission is complete, a "Live App Terminal" will show the output of your running server, and a "Download Project as .zip" button will appear, allowing you to download the entire codebase.
+Example Prompts
+Simple:
+Build a simple Flask app that returns the current server time as a JSON object at the /time endpoint.
+Intermediate (The one that finally worked perfectly):
+Build a live cryptocurrency price dashboard. The backend should be a Flask app with an API endpoint /api/prices that fetches live data for Bitcoin, Ethereum, and Dogecoin from the public CoinGecko API. The frontend should be a single HTML file that uses HTMX to poll the backend every 10 seconds and dynamically update the prices on the page without a full reload.
+Advanced:
+Create a sophisticated URL shortener application. It needs a modern, clean frontend using HTML and Tailwind CSS with a single input field. The backend should be a FastAPI application that takes a long URL, generates a unique short code, and stores the mapping in a SQLite database. There should be an API endpoint to create a short URL and a root route that redirects a short code to its original URL.
+A Note on the Journey
+This project is the result of a rigorous, iterative development process driven by user feedback. Early versions experimented with complex multi-agent systems, planners, and validators. While powerful in theory, they proved to be brittle and prone to logical failures and miscommunications.
+The final Genesis Prime architecture represents a return to first principles: a single, powerful AI mind given a robust set of tools and a clear objective is more effective than a committee of specialized but disconnected agents. This framework is a testament to that philosophy.
 📄 License
 This project is licensed under the MIT License. See the LICENSE file for details.
