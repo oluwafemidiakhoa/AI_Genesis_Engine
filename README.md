@@ -4,7 +4,7 @@ emoji: 🚀
 colorFrom: blue
 colorTo: green
 sdk: gradio
-sdk_version: 4.31.0
+sdk_version: 5.35.0
 app_file: run.py
 short_description: Enhanced Chatbot for Software Engineering
 ---
