@@ -10,7 +10,7 @@ from queue import Queue
 import zipfile
 
 # --- CONFIGURATION & STATE ---
-PROJECT_DIR = "genesis_final"
+PROJECT_DIR = "genesis_prime_project"
 openai_client = None
 app_process = None
 
@@ -87,8 +87,22 @@ def run_genesis_mission(initial_prompt, max_steps=25):
     if os.path.exists(PROJECT_DIR): shutil.rmtree(PROJECT_DIR)
     os.makedirs(PROJECT_DIR, exist_ok=True)
     
+    # This perfected prompt includes a crucial instruction: analyze imports and install dependencies.
     conversation = [
-        {"role": "system", "content": "You are an autonomous AI software developer. Your goal is to achieve the user's objective by calling a sequence of functions. Think step-by-step. To run a web server, you MUST use `launch_server`. When the objective is complete, call `finish_mission`."},
+        {
+            "role": "system",
+            "content": (
+                "You are an autonomous AI software developer. Your goal is to achieve the user's objective by calling a sequence of functions. "
+                "Think step-by-step. You have access to a file system and a shell. "
+                "A standard workflow is: "
+                "1. Write the necessary Python code to `app.py`. "
+                "2. Analyze the imports in the code you just wrote. "
+                "3. Write a `requirements.txt` file listing only the external libraries. "
+                "4. Use `run_shell_command` to `pip install -r requirements.txt`. "
+                "5. To run a web server, you MUST use the `launch_server` tool, not `run_shell_command`. "
+                "6. When the objective is complete and the app is running, call `finish_mission`."
+            )
+        },
         {"role": "user", "content": f"My objective is: {initial_prompt}"}
     ]
     
@@ -106,13 +120,8 @@ def run_genesis_mission(initial_prompt, max_steps=25):
         yield mission_log, current_file_list, "", None
         
         try:
-            # THE "FIRST STEP" PROTOCOL
-            tool_choice = "auto"
-            if i == 0:
-                # On the very first step, force the AI to assess its environment.
-                tool_choice = {"type": "function", "function": {"name": "list_files"}}
-
-            response = openai_client.chat.completions.create(model="gpt-4o", messages=conversation, tools=tools, tool_choice=tool_choice)
+            # The "First Step" protocol is removed as the AI has proven its initiative.
+            response = openai_client.chat.completions.create(model="gpt-4o", messages=conversation, tools=tools, tool_choice="auto")
             response_message = response.choices[0].message
             conversation.append(response_message)
             
@@ -132,7 +141,7 @@ def run_genesis_mission(initial_prompt, max_steps=25):
                 
                 if function_name == "finish_mission":
                     mission_log += "--- MISSION COMPLETE ---"
-                    zip_path = os.path.join(PROJECT_DIR, "genesis_app.zip")
+                    zip_path = os.path.join(PROJECT_DIR, "genesis_prime_app.zip")
                     with zipfile.ZipFile(zip_path, 'w') as zf:
                         for root, _, files in os.walk(PROJECT_DIR):
                             for file in files:
@@ -162,8 +171,8 @@ def run_genesis_mission(initial_prompt, max_steps=25):
     yield mission_log, current_file_list, "", None
 
 # --- GRADIO UI ---
-with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="sky"), title="Genesis Framework") as demo:
-    gr.Markdown("# 🧬 Genesis: The Autonomous AI Developer")
+with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="sky"), title="Genesis Prime") as demo:
+    gr.Markdown("# 🧬 Genesis Prime: The Autonomous AI Developer")
     status_bar = gr.Textbox("System Offline. Click 'Activate Engine' to begin.", label="System Status", interactive=False)
     
     with gr.Row():
