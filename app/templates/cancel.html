@@ -1,0 +1,10 @@
+<!-- cancel.html -->
+{% extends "base.html" %}
+{% block title %}Payment Canceled{% endblock %}
+{% block content %}
+<div class="max-w-2xl mx-auto text-center py-16">
+    <h1 class="text-4xl font-bold text-red-600">Payment Canceled</h1>
+    <p class="mt-4 text-lg text-gray-600">Your order was canceled. You have not been charged.</p>
+    <a href="{{ url_for('main.index') }}" class="mt-6 inline-block text-indigo-600 hover:text-indigo-500">Return to Homepage</a>
+</div>
+{% endblock %}
