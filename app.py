@@ -8,13 +8,14 @@ import shutil
 import threading
 from queue import Queue
 import zipfile
+from io import BytesIO
 
 # --- CONFIGURATION & STATE ---
-PROJECT_DIR = "chronos_project"
+PROJECT_DIR = "final_project"
 openai_client = None
 app_process = None
 
-# --- THE CHRONOS TOOLSET ---
+# --- TOOLSET ---
 def list_files(path: str = ".") -> str:
     full_path = os.path.join(PROJECT_DIR, path)
     if not os.path.isdir(full_path): return f"Error: Directory '{path}' does not exist."
@@ -38,8 +39,7 @@ def run_shell_command(command: str, cwd: str = PROJECT_DIR) -> str:
     except Exception as e: return f"Error executing shell command: {e}"
     
 def change_directory(path: str) -> str:
-    """Note to AI: This only changes the 'current directory' for future commands in this session."""
-    return f"Directory changed to {path}. Future shell commands will run here."
+    return f"Directory changed to {path} for subsequent shell commands."
 
 def launch_server(command: str, cwd: str = PROJECT_DIR) -> str:
     global app_process
@@ -60,28 +60,30 @@ def initialize_clients():
     try:
         openai_client = openai.OpenAI(api_key=openai_key)
         openai_client.models.list()
-        return "✅ Engine Online. The Chronos Framework is ready.", True
+        return "✅ Engine Online. The Final Framework is ready.", True
     except Exception as e: return f"❌ API Initialization Failed: {e}", False
 
 def stream_process_output(process, queue):
     for line in iter(process.stdout.readline, ''): queue.put(line)
     process.stdout.close()
 
-# --- THE CHRONOS ORCHESTRATOR ---
-def run_chronos_mission(initial_prompt, max_steps=25):
+# --- THE FINAL ORCHESTRATOR ---
+def run_final_mission(initial_prompt, max_steps=25):
     global app_process
     
     mission_log = "[MISSION LOG: START]\n"
+    # Yield initial empty state for all components
     yield mission_log, [], "", gr.update(visible=False, value=None)
 
     if os.path.exists(PROJECT_DIR): shutil.rmtree(PROJECT_DIR)
     os.makedirs(PROJECT_DIR, exist_ok=True)
     
-    # Chronos State
+    # FINAL FIX: The state trackers
     current_working_directory = PROJECT_DIR
-    
+    project_files = {} # This will be our source of truth
+
     conversation = [
-        {"role": "system", "content": "You are an autonomous AI developer. Your goal is to achieve the user's objective by calling a sequence of functions. Think step-by-step. You have a file system and a shell. Use `change_directory` to navigate. Use `launch_server` for long-running processes like web servers. When the objective is complete, call `finish_mission`."},
+        {"role": "system", "content": "You are an autonomous AI developer. Your goal is to achieve the user's objective by calling a sequence of functions. Think step-by-step. Use `change_directory` to navigate. Use `launch_server` for long-running processes. When the objective is complete, call `finish_mission`."},
         {"role": "user", "content": f"My objective is: {initial_prompt}"}
     ]
     
@@ -95,9 +97,8 @@ def run_chronos_mission(initial_prompt, max_steps=25):
     ]
     
     for i in range(max_steps):
-        mission_log += f"\n--- Step {i+1}/{max_steps} ---\nChronos Agent is thinking...\n"
-        current_file_list = [f for f in os.listdir(current_working_directory)] if os.path.isdir(current_working_directory) else []
-        yield mission_log, current_file_list, "", None
+        mission_log += f"\n--- Step {i+1}/{max_steps} ---\nAgent is thinking...\n"
+        yield mission_log, list(project_files.keys()), "", None
         
         try:
             response = openai_client.chat.completions.create(model="gpt-4o", messages=conversation, tools=tools, tool_choice="auto")
@@ -108,35 +109,43 @@ def run_chronos_mission(initial_prompt, max_steps=25):
 
             tool_responses = []
             for tool_call in response_message.tool_calls:
-                function_name = tool_call.function.name
-                function_args = json.loads(tool_call.function.arguments)
-                
+                function_name, function_args = tool_call.function.name, json.loads(tool_call.function.arguments)
                 mission_log += f"Action: Calling `{function_name}` with args: {function_args}\n"
                 
-                # Pass CWD to tools that need it
+                # Pass CWD to tools that need it, and update it if changed
                 if function_name in ["run_shell_command", "launch_server"]:
                     function_args["cwd"] = current_working_directory
-
+                
                 tool_function = globals()[function_name]
                 result = tool_function(**function_args)
                 
-                # Update CWD if 'cd' was called
                 if function_name == "change_directory":
                     new_path = os.path.join(PROJECT_DIR, function_args["path"])
                     if os.path.isdir(new_path):
                         current_working_directory = new_path
                     else:
                         result = f"Error: Directory '{function_args['path']}' does not exist."
+                
+                # FINAL FIX: Update our file state dictionary when a file is written
+                if function_name == "write_file" and "Error" not in result:
+                    project_files[function_args["path"]] = function_args["content"]
 
                 mission_log += f"Result:\n---\n{result}\n---\n"
                 
                 if function_name == "finish_mission":
                     mission_log += "--- MISSION COMPLETE ---"
-                    zip_path = os.path.join(PROJECT_DIR, "chronos_app.zip")
-                    with zipfile.ZipFile(zip_path, 'w') as zf:
-                        for root, _, files in os.walk(PROJECT_DIR):
-                            for file in files:
-                                if file != os.path.basename(zip_path): zf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), PROJECT_DIR))
+                    
+                    # FINAL FIX: Create the zip from our state dictionary
+                    zip_buffer = BytesIO()
+                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                        for path, content in project_files.items():
+                            zf.writestr(path, content)
+                    zip_buffer.seek(0)
+
+                    # Gradio's DownloadButton needs the raw bytes and a filename.
+                    # We pass this as a tuple. Unfortunately, Gradio's type hinting doesn't
+                    # show this well, but it's the correct way.
+                    download_payload = (zip_buffer, "ai_generated_app.zip")
                     
                     terminal_text = ""
                     if app_process:
@@ -146,7 +155,7 @@ def run_chronos_mission(initial_prompt, max_steps=25):
                         time.sleep(2)
                         while not output_queue.empty(): terminal_text += output_queue.get()
                     
-                    yield mission_log, current_file_list, terminal_text, gr.update(visible=True, value=zip_path)
+                    yield mission_log, list(project_files.keys()), terminal_text, gr.update(visible=True, value=download_payload)
                     return
 
                 tool_responses.append({"tool_call_id": tool_call.id, "role": "tool", "name": function_name, "content": result})
@@ -154,16 +163,15 @@ def run_chronos_mission(initial_prompt, max_steps=25):
             conversation.extend(tool_responses)
         except Exception as e:
             mission_log += f"Engine: [FATAL ERROR] An unexpected error occurred: {e}\nAborting mission."
-            yield mission_log, current_file_list, "", None
+            yield mission_log, list(project_files.keys()), "", None
             return
 
     mission_log += "\n--- Max steps reached. Mission concluding. ---"
-    yield mission_log, current_file_list, "", None
-
+    yield mission_log, list(project_files.keys()), "", None
 
 # --- GRADIO UI ---
-with gr.Blocks(theme=gr.themes.Soft(primary_hue="amber", secondary_hue="orange"), title="Chronos Framework") as demo:
-    gr.Markdown("# ⌛ Chronos: The Autonomous AI Developer")
+with gr.Blocks(theme=gr.themes.Soft(primary_hue="teal", secondary_hue="green"), title="The Final Framework") as demo:
+    gr.Markdown("# ✅ The Final Framework: Autonomous AI Developer")
     status_bar = gr.Textbox("System Offline. Click 'Activate Engine' to begin.", label="System Status", interactive=False)
     
     with gr.Row():
@@ -187,7 +195,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="amber", secondary_hue="orange")
         return {status_bar: gr.update(value=message), launch_btn: gr.update(interactive=success)}
     
     activate_btn.click(handle_activation, [], [status_bar, launch_btn])
-    launch_btn.click(fn=run_chronos_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, live_terminal, download_zip_btn])
+    launch_btn.click(fn=run_final_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, live_terminal, download_zip_btn])
 
 if __name__ == "__main__":
     demo.launch(debug=True)
