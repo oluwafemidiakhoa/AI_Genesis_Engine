@@ -1,12 +1,11 @@
 ---
 title: AI Genesis Engine
-emoji: 🏆
-colorFrom: green
-colorTo: yellow
+emoji: 🚀
+colorFrom: blue
+colorTo: green
 sdk: gradio
-sdk_version: 5.35.0
-app_file: app.py
-pinned: false
+sdk_version: 4.31.0
+app_file: run.py
 short_description: Enhanced Chatbot for Software Engineering
 ---
 
