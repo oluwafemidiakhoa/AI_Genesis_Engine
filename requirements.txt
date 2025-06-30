@@ -3,9 +3,9 @@ openai
 google-generativeai 
 beautifulsoup4 
 requests
-
 Flask
 Flask-SQLAlchemy
 python-dotenv
 stripe
-psycopg2-binary  # If using PostgreSQL
+psycopg2-binary
+gunicorn
