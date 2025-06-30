@@ -8,17 +8,20 @@ import shutil
 import threading
 from queue import Queue
 import zipfile
-from io import BytesIO
 
 # --- CONFIGURATION & STATE ---
-PROJECT_DIR = "final_project"
+PROJECT_DIR = "genesis_final"
 openai_client = None
 app_process = None
 
-# --- TOOLSET ---
+# --- THE GENESIS TOOLSET ---
 def list_files(path: str = ".") -> str:
+    """Lists all files and directories in a given path within the project."""
     full_path = os.path.join(PROJECT_DIR, path)
     if not os.path.isdir(full_path):
+        # If the user tries to list a file, just say it's not a directory.
+        if os.path.exists(full_path):
+            return f"Error: '{path}' is a file, not a directory."
         return f"Error: Directory '{path}' does not exist."
     try:
         files = os.listdir(full_path)
@@ -26,6 +29,7 @@ def list_files(path: str = ".") -> str:
     except Exception as e: return f"Error listing files: {e}"
 
 def write_file(path: str, content: str) -> str:
+    """Writes or overwrites a file with the given content."""
     full_path = os.path.join(PROJECT_DIR, path)
     try:
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
@@ -33,27 +37,31 @@ def write_file(path: str, content: str) -> str:
         return f"Successfully wrote {len(content)} bytes to {path}."
     except Exception as e: return f"Error writing to file: {e}"
 
-def run_shell_command(command: str, cwd: str = PROJECT_DIR) -> str:
+def run_shell_command(command: str) -> str:
+    """Executes a short-lived shell command and returns its output."""
     try:
-        result = subprocess.run(command, shell=True, cwd=cwd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(command, shell=True, cwd=PROJECT_DIR, capture_output=True, text=True, timeout=120)
         return f"COMMAND:\n$ {command}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     except Exception as e: return f"Error executing shell command: {e}"
-    
-def change_directory(path: str) -> str:
-    return f"Directory changed to {path} for subsequent shell commands."
 
-def launch_server(command: str, cwd: str = PROJECT_DIR) -> str:
+def launch_server(command: str) -> str:
+    """Launches a long-running server process in the background."""
     global app_process
     if app_process: app_process.kill()
     try:
-        app_process = subprocess.Popen(command, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+        app_process = subprocess.Popen(
+            command, shell=True, cwd=PROJECT_DIR, 
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+            text=True, bufsize=1, universal_newlines=True
+        )
         return f"Successfully launched server process with command: '{command}'."
     except Exception as e: return f"Error launching server: {e}"
 
 def finish_mission(reason: str) -> str:
+    """Call this when the user's objective is fully complete."""
     return f"Mission finished. Reason: {reason}"
 
-# --- INITIALIZATION & UTILITIES ---
+# --- INITIALIZATION ---
 def initialize_clients():
     global openai_client
     openai_key = os.getenv("OPENAI_API_KEY")
@@ -61,15 +69,16 @@ def initialize_clients():
     try:
         openai_client = openai.OpenAI(api_key=openai_key)
         openai_client.models.list()
-        return "✅ Engine Online. The Final Framework is ready.", True
+        return "✅ Engine Online. The Genesis Framework is ready.", True
     except Exception as e: return f"❌ API Initialization Failed: {e}", False
 
+# --- UTILITIES ---
 def stream_process_output(process, queue):
     for line in iter(process.stdout.readline, ''): queue.put(line)
     process.stdout.close()
 
-# --- THE FINAL ORCHESTRATOR ---
-def run_final_mission(initial_prompt, max_steps=25):
+# --- THE GENESIS ORCHESTRATOR ---
+def run_genesis_mission(initial_prompt, max_steps=25):
     global app_process
     
     mission_log = "[MISSION LOG: START]\n"
@@ -78,68 +87,57 @@ def run_final_mission(initial_prompt, max_steps=25):
     if os.path.exists(PROJECT_DIR): shutil.rmtree(PROJECT_DIR)
     os.makedirs(PROJECT_DIR, exist_ok=True)
     
-    current_working_directory = PROJECT_DIR
-    project_files = {}
-
     conversation = [
-        {"role": "system", "content": "You are an autonomous AI developer. Your goal is to achieve the user's objective by calling a sequence of functions. Think step-by-step. Use `change_directory` to navigate. Use `launch_server` for long-running processes. When the objective is complete, call `finish_mission`."},
+        {"role": "system", "content": "You are an autonomous AI software developer. Your goal is to achieve the user's objective by calling a sequence of functions. Think step-by-step. To run a web server, you MUST use `launch_server`. When the objective is complete, call `finish_mission`."},
         {"role": "user", "content": f"My objective is: {initial_prompt}"}
     ]
     
     tools = [
         {"type": "function", "function": {"name": "list_files", "description": "Lists files in a directory.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
         {"type": "function", "function": {"name": "write_file", "description": "Writes content to a file.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
-        {"type": "function", "function": {"name": "run_shell_command", "description": "Executes a short-lived command.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
-        {"type": "function", "function": {"name": "change_directory", "description": "Changes the working directory for subsequent shell commands.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
-        {"type": "function", "function": {"name": "launch_server", "description": "Launches a long-running server process.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
+        {"type": "function", "function": {"name": "run_shell_command", "description": "Executes a short-lived command that finishes.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
+        {"type": "function", "function": {"name": "launch_server", "description": "Launches a long-running server process in the background.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
         {"type": "function", "function": {"name": "finish_mission", "description": "Call this when the objective is complete.", "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]}}}
     ]
     
     for i in range(max_steps):
         mission_log += f"\n--- Step {i+1}/{max_steps} ---\nAgent is thinking...\n"
-        yield mission_log, list(project_files.keys()), "", None
+        current_file_list = [f for f in os.listdir(PROJECT_DIR)] if os.path.isdir(PROJECT_DIR) else []
+        yield mission_log, current_file_list, "", None
         
         try:
-            response = openai_client.chat.completions.create(model="gpt-4o", messages=conversation, tools=tools, tool_choice="auto")
+            # THE "FIRST STEP" PROTOCOL
+            tool_choice = "auto"
+            if i == 0:
+                # On the very first step, force the AI to assess its environment.
+                tool_choice = {"type": "function", "function": {"name": "list_files"}}
+
+            response = openai_client.chat.completions.create(model="gpt-4o", messages=conversation, tools=tools, tool_choice=tool_choice)
             response_message = response.choices[0].message
             conversation.append(response_message)
             
-            if not response_message.tool_calls: break
+            if not response_message.tool_calls:
+                mission_log += "Agent chose not to act. Concluding mission.\n"
+                break
 
             tool_responses = []
             for tool_call in response_message.tool_calls:
-                function_name, function_args = tool_call.function.name, json.loads(tool_call.function.arguments)
+                function_name = tool_call.function.name
+                function_args = json.loads(tool_call.function.arguments)
                 mission_log += f"Action: Calling `{function_name}` with args: {function_args}\n"
-                
-                if function_name in ["run_shell_command", "launch_server"]:
-                    function_args["cwd"] = current_working_directory
                 
                 tool_function = globals()[function_name]
                 result = tool_function(**function_args)
-                
-                if function_name == "change_directory":
-                    new_path = os.path.join(PROJECT_DIR, function_args["path"])
-                    if os.path.isdir(new_path):
-                        current_working_directory = new_path
-                    else:
-                        result = f"Error: Directory '{function_args['path']}' does not exist."
-                
-                if function_name == "write_file" and "Error" not in result:
-                    project_files[function_args["path"]] = function_args["content"]
-
                 mission_log += f"Result:\n---\n{result}\n---\n"
                 
                 if function_name == "finish_mission":
                     mission_log += "--- MISSION COMPLETE ---"
-                    
-                    # THE FINAL FIX: Save the zip to a temporary file on disk
-                    temp_dir = "/tmp/gradio"
-                    os.makedirs(temp_dir, exist_ok=True)
-                    zip_path = os.path.join(temp_dir, "ai_generated_app.zip")
-
-                    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                        for path, content in project_files.items():
-                            zf.writestr(path, content)
+                    zip_path = os.path.join(PROJECT_DIR, "genesis_app.zip")
+                    with zipfile.ZipFile(zip_path, 'w') as zf:
+                        for root, _, files in os.walk(PROJECT_DIR):
+                            for file in files:
+                                if file != os.path.basename(zip_path):
+                                    zf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), PROJECT_DIR))
                     
                     terminal_text = ""
                     if app_process:
@@ -149,8 +147,7 @@ def run_final_mission(initial_prompt, max_steps=25):
                         time.sleep(2)
                         while not output_queue.empty(): terminal_text += output_queue.get()
                     
-                    # Yield the string path to the file
-                    yield mission_log, list(project_files.keys()), terminal_text, gr.update(visible=True, value=zip_path)
+                    yield mission_log, current_file_list, terminal_text, gr.update(visible=True, value=zip_path)
                     return
 
                 tool_responses.append({"tool_call_id": tool_call.id, "role": "tool", "name": function_name, "content": result})
@@ -158,15 +155,15 @@ def run_final_mission(initial_prompt, max_steps=25):
             conversation.extend(tool_responses)
         except Exception as e:
             mission_log += f"Engine: [FATAL ERROR] An unexpected error occurred: {e}\nAborting mission."
-            yield mission_log, list(project_files.keys()), "", None
+            yield mission_log, current_file_list, "", None
             return
 
     mission_log += "\n--- Max steps reached. Mission concluding. ---"
-    yield mission_log, list(project_files.keys()), "", None
+    yield mission_log, current_file_list, "", None
 
 # --- GRADIO UI ---
-with gr.Blocks(theme=gr.themes.Soft(primary_hue="teal", secondary_hue="green"), title="The Final Framework") as demo:
-    gr.Markdown("# ✅ The Final Framework: Autonomous AI Developer")
+with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="sky"), title="Genesis Framework") as demo:
+    gr.Markdown("# 🧬 Genesis: The Autonomous AI Developer")
     status_bar = gr.Textbox("System Offline. Click 'Activate Engine' to begin.", label="System Status", interactive=False)
     
     with gr.Row():
@@ -190,7 +187,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="teal", secondary_hue="green"), 
         return {status_bar: gr.update(value=message), launch_btn: gr.update(interactive=success)}
     
     activate_btn.click(handle_activation, [], [status_bar, launch_btn])
-    launch_btn.click(fn=run_final_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, live_terminal, download_zip_btn])
+    launch_btn.click(fn=run_genesis_mission, inputs=[mission_prompt], outputs=[mission_log_output, file_tree, live_terminal, download_zip_btn])
 
 if __name__ == "__main__":
     demo.launch(debug=True)
