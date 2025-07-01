@@ -10,13 +10,51 @@
     <p class="mt-6 text-lg leading-8 text-gray-600">
         Built by an AI, ready for your next venture. Stop setting up and start building.
     </p>
-    <div class="mt-10 flex items-center justify-center gap-x-6">
-        <!-- THE FIX: A simple, standard HTML form. No JavaScript needed. -->
-        <form action="{{ url_for('payments.create_checkout_session') }}" method="POST">
-            <button type="submit" class="rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
+    <div id="payment-container" class="mt-10 flex items-center justify-center gap-x-6">
+        <form id="payment-form" action="{{ url_for('payments.create_checkout_session') }}" method="POST">
+            <button type="submit" id="submit-button" class="rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
                 Get Started - $29/month
             </button>
         </form>
     </div>
+    <p id="error-message" class="mt-4 text-red-600"></p>
 </div>
+
+<script>
+    const form = document.getElementById('payment-form');
+    const paymentContainer = document.getElementById('payment-container');
+    const errorMessage = document.getElementById('error-message');
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const submitButton = document.getElementById('submit-button');
+        submitButton.disabled = true;
+        submitButton.textContent = 'Creating secure session...';
+        errorMessage.textContent = '';
+
+        try {
+            const response = await fetch(form.action, { method: 'POST' });
+            const session = await response.json();
+
+            if (session.url) {
+                // THE FIX: Replace the button with a clickable link
+                paymentContainer.innerHTML = `
+                    <a href="${session.url}" 
+                       target="_top" 
+                       class="rounded-md bg-green-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-green-500">
+                        Click Here to Proceed to Secure Checkout
+                    </a>
+                `;
+            } else {
+                errorMessage.textContent = `Error: ${session.error || 'Could not create session.'}`;
+                submitButton.disabled = false;
+                submitButton.textContent = 'Get Started - $29/month';
+            }
+        } catch (error) {
+            errorMessage.textContent = `An unexpected network error occurred.`;
+            submitButton.disabled = false;
+            submitButton.textContent = 'Get Started - $29/month';
+        }
+    });
+</script>
 {% endblock %}
