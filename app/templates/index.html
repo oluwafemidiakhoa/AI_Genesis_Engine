@@ -11,52 +11,12 @@
         Built by an AI, ready for your next venture. Stop setting up and start building.
     </p>
     <div class="mt-10 flex items-center justify-center gap-x-6">
-        <!-- The action URL now comes from our backend -->
-        <form id="payment-form" action="{{ url_for('payments.create_checkout_session') }}" method="POST">
-            <button type="submit" id="submit-button" class="rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
+        <!-- THE FIX: A simple, standard HTML form. No JavaScript needed. -->
+        <form action="{{ url_for('payments.create_checkout_session') }}" method="POST">
+            <button type="submit" class="rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
                 Get Started - $29/month
             </button>
         </form>
     </div>
-    <p id="error-message" class="mt-4 text-red-600"></p>
 </div>
-
-<script>
-    const form = document.getElementById('payment-form');
-    const submitButton = document.getElementById('submit-button');
-    const errorMessage = document.getElementById('error-message');
-    // THE FIX: The host URL is now available as a JavaScript variable.
-    const hostUrl = "{{ host_url }}";
-
-    form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        submitButton.disabled = true;
-        submitButton.textContent = 'Creating secure session...';
-        errorMessage.textContent = '';
-
-        try {
-            // THE FIX: We construct the full, absolute URL for the fetch request.
-            const fetchUrl = new URL(form.action, hostUrl).href;
-            
-            const response = await fetch(fetchUrl, {
-                method: 'POST'
-            });
-
-            const session = await response.json();
-
-            if (session.url) {
-                // This part is already correct and will work now.
-                window.open(session.url, '_top');
-            } else if (session.error) {
-                errorMessage.textContent = `Error: ${session.error}`;
-                submitButton.disabled = false;
-                submitButton.textContent = 'Get Started - $29/month';
-            }
-        } catch (error) {
-            errorMessage.textContent = `A network error occurred: ${error}. Please refresh and try again.`;
-            submitButton.disabled = false;
-            submitButton.textContent = 'Get Started - $29/month';
-        }
-    });
-</script>
 {% endblock %}
