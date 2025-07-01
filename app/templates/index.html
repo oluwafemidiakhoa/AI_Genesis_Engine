@@ -10,24 +10,29 @@
     <p class="mt-6 text-lg leading-8 text-gray-600">
         Built by an AI, ready for your next venture. Stop setting up and start building.
     </p>
-    <div class="mt-10 flex items-center justify-center gap-x-6">
-        <!-- THE FIX: The form now has an ID and we handle the submission with JS -->
+    <!-- We will use a div for our button and the redirect link -->
+    <div id="payment-container" class="mt-10 flex items-center justify-center gap-x-6">
         <form id="payment-form" action="{{ url_for('payments.create_checkout_session') }}" method="POST">
             <button type="submit" id="submit-button" class="rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
                 Get Started - $29/month
             </button>
         </form>
     </div>
+    <!-- We can add a placeholder for error messages -->
+    <p id="error-message" class="mt-4 text-red-600"></p>
 </div>
 
 <script>
     const form = document.getElementById('payment-form');
-    const submitButton = document.getElementById('submit-button');
+    const paymentContainer = document.getElementById('payment-container');
+    const errorMessage = document.getElementById('error-message');
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault(); // Prevent the default form submission
+        const submitButton = document.getElementById('submit-button');
         submitButton.disabled = true;
-        submitButton.textContent = 'Redirecting to checkout...';
+        submitButton.textContent = 'Creating secure session...';
+        errorMessage.textContent = ''; // Clear previous errors
 
         try {
             const response = await fetch(form.action, {
@@ -37,15 +42,21 @@
             const session = await response.json();
 
             if (session.url) {
-                // This is the magic line. It tells the main browser window to go to the Stripe URL.
-                window.top.location.href = session.url;
+                // THE FINAL FIX: Instead of a redirect, create a link.
+                paymentContainer.innerHTML = `
+                    <a href="${session.url}" 
+                       target="_top" 
+                       class="rounded-md bg-green-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-green-500">
+                        Click Here to Proceed to Secure Checkout
+                    </a>
+                `;
             } else if (session.error) {
-                alert(`Error: ${session.error}`);
+                errorMessage.textContent = `Error: ${session.error}`;
                 submitButton.disabled = false;
                 submitButton.textContent = 'Get Started - $29/month';
             }
         } catch (error) {
-            alert(`An error occurred: ${error}`);
+            errorMessage.textContent = `An unexpected error occurred. Please try again.`;
             submitButton.disabled = false;
             submitButton.textContent = 'Get Started - $29/month';
         }
