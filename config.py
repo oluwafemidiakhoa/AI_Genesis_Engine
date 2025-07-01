@@ -1,37 +1,64 @@
 # config.py
-
 import os
 from dotenv import load_dotenv
 
+# Load environment variables from a .env file if it exists.
+# This is useful for local development.
 load_dotenv()
 
-# The guaranteed writable path in Hugging Face Spaces with persistent storage
-# If this directory doesn't exist, the app will create it.
-DATA_DIR = "/data"
-
 class Config:
-    SECRET_KEY = os.getenv('SECRET_KEY', 'a_very_secret_key_that_should_be_changed')
-    SQLALCHEMY_TRACK_MODIFICATIONS = False
-    # Point the instance path directly to our writable directory
-    INSTANCE_PATH = os.path.join(DATA_DIR, 'instance')
+    """Base configuration settings."""
+    # A strong secret key is crucial for session security.
+    # It's better to fail if it's not set in production.
+    SECRET_KEY = os.getenv('SECRET_KEY')
+    if not SECRET_KEY:
+        raise ValueError("No SECRET_KEY set for Flask application. Please set it in your environment.")
 
-class DevelopmentConfig(Config):
-    DEBUG = True
-    # Point the SQLite database URI to a file within our writable directory
-    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', f'sqlite:///{os.path.join(DATA_DIR, "app.db")}')
+    # This is a good default and reduces overhead.
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
     
+    # Stripe keys that are common to all environments
     STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY')
     STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
+    STRIPE_PRICE_ID = os.getenv('STRIPE_PRICE_ID')
     STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET')
-    STRIPE_PRICE_ID = os.getenv('STRIPE_PRICE_ID', 'price_xxxxxxxxxxxxxx')
+
+    # Fail fast if essential Stripe keys are missing.
+    # This prevents the app from running in a broken state.
+    if not all([STRIPE_PUBLISHABLE_KEY, STRIPE_SECRET_KEY, STRIPE_PRICE_ID]):
+        raise ValueError("One or more required Stripe keys (PUBLISHABLE, SECRET, or PRICE_ID) are not set.")
+
+class DevelopmentConfig(Config):
+    """Configuration for development."""
+    DEBUG = True
+    
+    # Use a guaranteed-writable directory for the local SQLite database.
+    # This path is relative to the project root.
+    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', 'sqlite:///instance/dev.db')
+    
+    # Ensure the instance folder exists for the SQLite database.
+    # The 'instance' folder is the conventional place for this in Flask.
+    instance_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'instance')
+    os.makedirs(instance_path, exist_ok=True)
+
 
 class ProductionConfig(Config):
-    # In a real production environment, you would use a managed database like PostgreSQL
+    """Configuration for production."""
     DEBUG = False
-    SQLALCHEMY_DATABASE_URI = os.getenv('POSTGRES_URL', f'sqlite:///{os.path.join(DATA_DIR, "prod.db")}')
-    # ... other production settings ...
+    
+    # Production should always use a robust, managed database like PostgreSQL.
+    # The application will fail to start if DATABASE_URL is not set.
+    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL')
+    if not SQLALCHEMY_DATABASE_URI:
+        raise ValueError("No DATABASE_URL set for production environment.")
 
+# A dictionary to access configurations by name, e.g., 'dev' or 'prod'.
+# We can determine which to use via an environment variable.
 config_by_name = dict(
     dev=DevelopmentConfig,
     prod=ProductionConfig
 )
+
+# You can set FLASK_ENV=prod in your Hugging Face secrets to use the production config.
+key = os.getenv('FLASK_ENV', 'dev')
+config = config_by_name[key]
