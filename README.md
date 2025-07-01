@@ -98,4 +98,4 @@ Click "Activate System Engine".
 Try generating a boilerplate with the default (free) options.
 Enter a valid Lemon Squeezy license key to unlock the Pro features and test a more advanced boilerplate generation.
 📄 License
-This project is licensed under the MIT License. You are free to use, modify, and distribute this code.
+This project is licensed under the MIT License. You are free to use, modify, and distribute this code."# AI_Genesis_Engine" 
