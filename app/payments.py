@@ -1,7 +1,7 @@
 # app/payments.py
 
 import stripe
-from flask import Blueprint, request, jsonify, current_app, render_template
+from flask import Blueprint, request, jsonify, redirect, url_for, current_app
 from .models import User, db
 
 payments = Blueprint('payments', __name__)
@@ -20,8 +20,6 @@ def create_checkout_session():
             db.session.add(user)
             db.session.commit()
         
-        # NOTE THE CHANGE HERE: We are no longer using url_for, we provide the full URLs directly.
-        # This is more robust for deployments.
         domain_url = request.host_url 
         
         checkout_session = stripe.checkout.Session.create(
@@ -29,17 +27,19 @@ def create_checkout_session():
             payment_method_types=['card'],
             line_items=[{'price': current_app.config['STRIPE_PRICE_ID'], 'quantity': 1}],
             mode='subscription',
-            success_url=domain_url + 'success', # Use the full URL
-            cancel_url=domain_url + 'cancel',   # Use the full URL
+            success_url=url_for('main.success', _external=True),
+            cancel_url=url_for('main.cancel', _external=True),
         )
-        # THE FIX: Instead of redirecting, return the URL as JSON.
-        return jsonify({'url': checkout_session.url})
+        # THE FIX: Return to the simple, powerful server-side redirect.
+        return redirect(checkout_session.url, code=303)
     except Exception as e:
+        # If there's an error, we can render an error page or return JSON
         return jsonify(error=str(e)), 403
 
+# The webhook function remains unchanged.
 @payments.route('/webhook', methods=['POST'])
 def stripe_webhook():
-    # ... (This function remains exactly the same) ...
+    # ... (This function is already correct) ...
     payload = request.get_data(as_text=True)
     sig_header = request.headers.get('Stripe-Signature')
     webhook_secret = current_app.config['STRIPE_WEBHOOK_SECRET']
