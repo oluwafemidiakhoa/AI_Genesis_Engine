@@ -6,16 +6,14 @@ WORKDIR /code
 COPY ./requirements.txt /code/requirements.txt
 RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
-# Copy the rest of the application code
+# Copy all our application files
 COPY . /code/
 
-# Run the database initialization command during the build process
-# This creates the database file in the persistent /data volume
-RUN flask --app manage.py init_db
+# Make our entrypoint script executable
+RUN chmod +x /code/entrypoint.sh
 
 # Expose the port
 EXPOSE 8000
 
-# The command to run the application
-# We now point gunicorn to the 'app' object created in run.py
-CMD ["gunicorn", "--workers", "2", "--bind", "0.0.0.0:8000", "run:app"]
+# Set the entrypoint script as the command to run when the container starts
+ENTRYPOINT ["/code/entrypoint.sh"]
