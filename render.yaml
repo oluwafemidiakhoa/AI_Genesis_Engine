@@ -1,31 +1,42 @@
 # render.yaml
-# This file tells Render how to build and deploy your entire application.
+# This file defines the "Infrastructure as Code" for your application on Render.
 
 services:
-  # 1. The PostgreSQL Database
+  # Service 1: The PostgreSQL Database
+  # This tells Render to create a free-tier managed database for us.
   - type: pserv
     name: ai-genesis-db
     plan: free
     postgresMajorVersion: 16
-    region: oregon
+    region: oregon # Make sure this matches your web service region
 
-  # 2. The Flask Web Service
+  # Service 2: The Flask Web Service
+  # This defines our main application, built from the Dockerfile.
   - type: web
     name: AI-Genesis-Engine
     runtime: docker
-    region: oregon
-    plan: free # Or 'starter' if you need more resources
-    healthCheckPath: /  # Render will ping this path to see if your app is live
+    region: oregon # Make sure this matches your database region
+    plan: free # Can be upgraded to 'starter' later if you need more resources
+    
+    # This tells Render what to check to see if your app is healthy and running.
+    healthCheckPath: /
+    
+    # This section defines the environment variables for your web service.
     envVars:
-      # This tells our code to use the database URL provided by Render
+      # This forces Flask to run in a production-ready mode.
       - key: FLASK_CONFIG
         value: prod
-      # The database URL is automatically injected by Render from the database service above
+      
+      # This is the MAGIC line. It links the database to the web service.
+      # It takes the connection string from the 'ai-genesis-db' service defined above
+      # and makes it available to our app as the 'DATABASE_URL' environment variable.
       - fromDatabase:
           name: ai-genesis-db
           property: connectionString
         key: DATABASE_URL
-      # All your other secrets are still pulled from the Render dashboard
+      
+      # We tell Render that all these other keys will be provided manually
+      # in the dashboard secrets. 'sync: false' prevents Render from overwriting them.
       - key: SECRET_KEY
         sync: false
       - key: STRIPE_PUBLISHABLE_KEY
