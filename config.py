@@ -2,30 +2,50 @@
 import os
 from dotenv import load_dotenv
 
+# load_dotenv() will load variables from a .env file for LOCAL development.
+# In production on Render, these will be set by the dashboard/render.yaml.
 load_dotenv()
 
 class Config:
+    """Base configuration class."""
+    
+    # CRITICAL: Flask requires a secret key for session management and security.
+    # This MUST be set in your Render environment secrets.
     SECRET_KEY = os.getenv('SECRET_KEY')
     if not SECRET_KEY:
-        raise ValueError("No SECRET_KEY set. Please set it in your environment secrets.")
+        raise ValueError("FATAL ERROR: No SECRET_KEY set. Please set this in your environment secrets.")
+        
+    # This is a standard setting to disable a noisy Flask-SQLAlchemy feature.
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL') # This will now be set by Render
+    
+    # This will be automatically provided by Render via the render.yaml file.
+    # We raise an error if it's missing to ensure the app doesn't run without a database.
+    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL')
     if not SQLALCHEMY_DATABASE_URI:
-        # Fallback for local development if DATABASE_URL is not set
-        SQLALCHEMY_DATABASE_URI = 'sqlite:///dev.db'
-        print("WARNING: DATABASE_URL not found. Falling back to local SQLite database.")
+        # For LOCAL development only, you can uncomment the next line and create a local .env file
+        # SQLALCHEMY_DATABASE_URI = 'sqlite:///dev.db'
+        raise ValueError("FATAL ERROR: No DATABASE_URL found. Please link a database in your Render environment.")
 
+    # All your other API keys are loaded from the environment here.
     STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY')
     STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
     STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET')
     STRIPE_PRICE_ID = os.getenv('STRIPE_PRICE_ID')
+    
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+
 
 class DevelopmentConfig(Config):
+    """Configuration for local development."""
     DEBUG = True
 
 class ProductionConfig(Config):
+    """Configuration for production."""
     DEBUG = False
+    # In production, you might want to add other settings, like logging configurations.
 
+# This dictionary allows us to select the configuration by name.
 config = {
     'dev': DevelopmentConfig,
     'prod': ProductionConfig
