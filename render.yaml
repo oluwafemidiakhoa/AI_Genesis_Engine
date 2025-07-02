@@ -1,0 +1,42 @@
+# render.yaml
+# This file tells Render how to build and deploy your entire application.
+
+services:
+  # 1. The PostgreSQL Database
+  - type: pserv
+    name: ai-genesis-db
+    plan: free
+    postgresMajorVersion: 16
+    region: oregon
+
+  # 2. The Flask Web Service
+  - type: web
+    name: AI-Genesis-Engine
+    runtime: docker
+    region: oregon
+    plan: free # Or 'starter' if you need more resources
+    healthCheckPath: /  # Render will ping this path to see if your app is live
+    envVars:
+      # This tells our code to use the database URL provided by Render
+      - key: FLASK_CONFIG
+        value: prod
+      # The database URL is automatically injected by Render from the database service above
+      - fromDatabase:
+          name: ai-genesis-db
+          property: connectionString
+        key: DATABASE_URL
+      # All your other secrets are still pulled from the Render dashboard
+      - key: SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PRICE_ID
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
