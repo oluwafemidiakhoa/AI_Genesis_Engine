@@ -1,44 +1,36 @@
-# ─────────────────────────────
-# Stage 1: Tailwind CSS Builder
-# ─────────────────────────────
-FROM node:18-alpine AS tailwind-builder
+# Stage 1: Build frontend assets
+FROM node:18-slim as frontend-builder
 
 WORKDIR /app
 
-# Install Tailwind
+# Copy package files and install dependencies
 COPY package*.json ./
 RUN npm install
 
-# Copy Tailwind input and config
-COPY ./app/static/css ./app/static/css
-COPY tailwind.config.js ./
+# Copy the rest of the frontend source code
+COPY . .
 
-# Build the CSS
-RUN npx tailwindcss -i ./app/static/css/input.css -o ./app/static/css/output.css
+# Build the CSS. This runs the "build" script from your package.json
+RUN npm run build
 
-# ─────────────────────────────
-# Stage 2: Python Backend
-# ─────────────────────────────
+# Stage 2: Setup the Python application
 FROM python:3.10-slim
 
 WORKDIR /app
 
-# Prevent .pyc files and enable unbuffered logging
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
 
-# Install Python dependencies
+# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app code
+# Copy the application code
 COPY . .
 
-# Copy compiled CSS from Node stage
-COPY --from=tailwind-builder /app/app/static/css/output.css ./app/static/css/output.css
+# Copy the built static assets from the previous stage
+COPY --from=frontend-builder /app/app/static/css/output.css ./app/static/css/output.css
 
-# Optional: expose default dev port
-EXPOSE 8000
-
-# Use shell form to allow $PORT expansion; fallback to 8000 if undefined
-CMD /bin/sh -c "gunicorn --bind 0.0.0.0:${PORT:-8000} wsgi:app"
+# The command to run the application (Render will use the PORT environment variable)
+CMD gunicorn --bind 0.0.0.0:$PORT wsgi:app
