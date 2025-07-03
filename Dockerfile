@@ -3,18 +3,17 @@
 # ─────────────────────────────
 FROM node:18-alpine AS tailwind-builder
 
-# Set working directory
 WORKDIR /app
 
-# Install Node.js dependencies
+# Install Tailwind
 COPY package*.json ./
 RUN npm install
 
-# Copy Tailwind input and configuration
+# Copy Tailwind input and config
 COPY ./app/static/css ./app/static/css
 COPY tailwind.config.js ./
 
-# Build CSS using Tailwind CLI
+# Build the CSS
 RUN npx tailwindcss -i ./app/static/css/input.css -o ./app/static/css/output.css
 
 # ─────────────────────────────
@@ -22,10 +21,9 @@ RUN npx tailwindcss -i ./app/static/css/input.css -o ./app/static/css/output.css
 # ─────────────────────────────
 FROM python:3.10-slim
 
-# Set working directory
 WORKDIR /app
 
-# Environment variables
+# Prevent .pyc files and enable unbuffered logging
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
@@ -33,14 +31,14 @@ ENV PYTHONUNBUFFERED=1
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy app code
 COPY . .
 
-# Copy built CSS from frontend stage
+# Copy compiled CSS from Node stage
 COPY --from=tailwind-builder /app/app/static/css/output.css ./app/static/css/output.css
 
-# Expose a port for local development (optional)
+# Optional: expose default dev port
 EXPOSE 8000
 
-# Render will provide $PORT at runtime
-CMD ["/bin/sh", "-c", "gunicorn --bind 0.0.0.0:$PORT wsgi:app"]
+# Use shell form to allow $PORT expansion; fallback to 8000 if undefined
+CMD /bin/sh -c "gunicorn --bind 0.0.0.0:${PORT:-8000} wsgi:app"
