@@ -3,17 +3,18 @@
 # ─────────────────────────────
 FROM node:18-alpine AS tailwind-builder
 
+# Set working directory
 WORKDIR /app
 
-# Install Tailwind dependencies
+# Install Node.js dependencies
 COPY package*.json ./
 RUN npm install
 
-# Copy Tailwind input and config files
+# Copy Tailwind input and configuration
 COPY ./app/static/css ./app/static/css
 COPY tailwind.config.js ./
 
-# Build the CSS
+# Build CSS using Tailwind CLI
 RUN npx tailwindcss -i ./app/static/css/input.css -o ./app/static/css/output.css
 
 # ─────────────────────────────
@@ -21,9 +22,10 @@ RUN npx tailwindcss -i ./app/static/css/input.css -o ./app/static/css/output.css
 # ─────────────────────────────
 FROM python:3.10-slim
 
+# Set working directory
 WORKDIR /app
 
-# Environment settings
+# Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
@@ -31,14 +33,14 @@ ENV PYTHONUNBUFFERED=1
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app source code
+# Copy application code
 COPY . .
 
-# Bring in built CSS from tailwind-builder stage
+# Copy built CSS from frontend stage
 COPY --from=tailwind-builder /app/app/static/css/output.css ./app/static/css/output.css
 
-# Expose default port (optional for local testing)
+# Expose a port for local development (optional)
 EXPOSE 8000
 
-# Run the app (Render will inject $PORT at runtime)
-CMD gunicorn --bind 0.0.0.0:$PORT wsgi:app
+# Render will provide $PORT at runtime
+CMD ["/bin/sh", "-c", "gunicorn --bind 0.0.0.0:$PORT wsgi:app"]
