@@ -11,6 +11,11 @@ DUMMY_USER_EMAIL = "customer@example.com"
 @payments.route('/create-checkout-session', methods=['POST'])
 def create_checkout_session():
     stripe.api_key = current_app.config['STRIPE_SECRET_KEY']
+    data = request.get_json()
+    business_idea = data.get('business_idea')
+
+    if not business_idea:
+        return jsonify(error="Business idea is required."), 400
     
     try:
         user = User.query.filter_by(email=DUMMY_USER_EMAIL).first()
@@ -29,13 +34,17 @@ def create_checkout_session():
             mode='subscription',
             success_url=domain_url + 'success',
             cancel_url=domain_url + 'cancel',
+            metadata={
+                'business_idea': business_idea
+            }
         )
-        # THE FIX: Return the URL as JSON
         return jsonify({'url': checkout_session.url})
     except Exception as e:
         return jsonify(error=str(e)), 403
 
-# ... The webhook function remains the same ...
+from .engine.agents import Strategist
+from .models import Project
+
 @payments.route('/webhook', methods=['POST'])
 def stripe_webhook():
     payload = request.get_data(as_text=True)
@@ -45,14 +54,42 @@ def stripe_webhook():
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
     except ValueError: return 'Invalid payload', 400
     except stripe.error.SignatureVerificationError: return 'Invalid signature', 400
+
     if event['type'] == 'checkout.session.completed':
         session = event['data']['object']
         customer_id = session.get('customer')
         subscription_id = session.get('subscription')
+        business_idea = session.get('metadata', {}).get('business_idea')
+
         user = User.query.filter_by(stripe_customer_id=customer_id).first()
         if user:
+            # Update user subscription status
             user.is_subscribed = True
             user.subscription_id = subscription_id
+
+            if business_idea:
+                # Create a new project
+                new_project = Project(
+                    user_id=user.id,
+                    business_idea=business_idea,
+                    status='generating_prd'
+                )
+                db.session.add(new_project)
+                db.session.commit()
+
+                # Trigger the Strategist agent
+                try:
+                    strategist = Strategist()
+                    prd = strategist.generate_prd(business_idea)
+                    new_project.prd = prd
+                    new_project.status = 'completed'
+                    print(f"PRD generated for project {new_project.id}")
+                except Exception as e:
+                    new_project.status = 'failed'
+                    new_project.prd = f"Failed to generate PRD: {e}"
+                    print(f"Error generating PRD for project {new_project.id}: {e}")
+
             db.session.commit()
-            print(f"User {user.email} has successfully subscribed.")
+            print(f"User {user.email} has successfully subscribed and project processed.")
+
     return 'Success', 200

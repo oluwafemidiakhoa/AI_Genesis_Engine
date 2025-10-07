@@ -22,9 +22,8 @@ class Config:
     # We raise an error if it's missing to ensure the app doesn't run without a database.
     SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL')
     if not SQLALCHEMY_DATABASE_URI:
-        # For LOCAL development only, you can uncomment the next line and create a local .env file
-        # SQLALCHEMY_DATABASE_URI = 'sqlite:///dev.db'
-        raise ValueError("FATAL ERROR: No DATABASE_URL found. Please link a database in your Render environment.")
+        # For local development and testing, we fall back to a local SQLite database.
+        SQLALCHEMY_DATABASE_URI = "sqlite:///dev.db"
 
     # All your other API keys are loaded from the environment here.
     STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY')
