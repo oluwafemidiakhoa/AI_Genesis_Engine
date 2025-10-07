@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Instance folder
+/instance/
+
+# Log files
+*.log
+
+# Environment variables
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Database
+*.db
+*.sqlite3
+
+# OS-generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

@@ -14,6 +14,18 @@ def index():
 def success():
     return render_template('success.html')
 
+from .models import User, Project
+
+@main.route('/projects')
+def list_projects():
+    # For now, we'll fetch projects for the dummy user.
+    # In a real app, you would get the user from the session.
+    user = User.query.filter_by(email="customer@example.com").first()
+    projects = []
+    if user:
+        projects = Project.query.filter_by(user_id=user.id).order_by(Project.created_at.desc()).all()
+    return render_template('projects.html', projects=projects)
+
 @main.route('/cancel')
 def cancel():
     return render_template('cancel.html')
